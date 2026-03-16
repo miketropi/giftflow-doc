@@ -1,0 +1,864 @@
+---
+title: "Payment Process — Hooks & Filters"
+description: "Complete reference for every action hook and filter hook in the GiftFlow payment pipeline, from form submission through gateway processing, status updates, and post-payment notifications."
+sidebar_position: 6
+tags:
+  - "giftflow"
+  - "developer"
+  - "hooks"
+  - "filters"
+  - "payment"
+  - "stripe"
+  - "paypal"
+---
+
+This guide maps every action hook and filter hook that fires during the GiftFlow payment process — from the moment a donor submits the form to the final webhook confirmation. All hooks and filters are extracted directly from the plugin source code.
+
+---
+
+## The Payment Process at a Glance
+
+```
+[Donor submits form]
+        │
+        ▼
+① giftflow_donation_form_fields          ← filter: modify/add form fields
+② giftflow_donation_form_before_process_donation  ← action: validate (recaptcha)
+        │
+        ▼
+③ giftflow_donation_validate             ← filter: custom validation logic
+④ giftflow_donation_before_create        ← filter + action: intercept before DB insert
+⑤ giftflow_donation_post_data            ← filter: modify WP post args
+⑥ giftflow_donation_created              ← action: donation post created (status = pending)
+⑦ giftflow_donation_meta_saved           ← action: all meta saved
+        │
+        ▼
+⑧ [gateway::process_payment()]           ← each gateway runs its own logic
+        │
+        ├── giftflow_stripe_prepare_payment_intent_data  ← Stripe filter
+        ├── giftflow_stripe_customer_data                ← Stripe filter
+        ├── giftflow_paypal_prepare_payment_data         ← PayPal filter
+        │
+        ▼
+⑨ giftflow_donation_before_status_update ← action: fires before status changes
+⑩ giftflow_donation_status_updated       ← action: status changed
+⑪ giftflow_donation_status_{$status}     ← dynamic action: e.g. _completed, _failed
+        │
+        ▼
+⑫ giftflow_donation_after_payment_processed  ← action: emails, user creation
+```
+
+---
+
+## ① Submission Layer — `class-forms.php`
+
+### `giftflow_donation_form_fields` — filter
+
+Runs after the form payload is sanitized but **before nonce verification and validation**. Use this to inject extra fields from the frontend into the processing pipeline.
+
+```
+Type:       filter
+Parameters: array $fields — sanitized form fields
+Returns:    array
+Source:     class-forms.php
+```
+
+```php
+add_filter( 'giftflow_donation_form_fields', function( $fields ) {
+    // Example: parse a hidden field your template added
+    $fields['my_custom_field'] = sanitize_text_field( $fields['my_custom_field'] ?? '' );
+    return $fields;
+} );
+```
+
+---
+
+### `giftflow_donation_form_before_process_donation` — action
+
+Fires **before validation**, after the nonce is verified. Use it for additional pre-processing checks. Throwing a `wp_send_json_error()` here will abort the entire submission.
+
+GiftFlow uses this hook internally to run reCAPTCHA validation (priority 10).
+
+```
+Type:       action
+Parameters: array $fields — sanitized form fields
+Priority:   10 (reCAPTCHA), add yours at higher priority
+Source:     class-forms.php
+```
+
+```php
+add_action( 'giftflow_donation_form_before_process_donation', function( $fields ) {
+    $min = 5.00;
+    if ( floatval( $fields['donation_amount'] ) < $min ) {
+        wp_send_json_error( array( 'message' => 'Minimum donation is $5.' ) );
+    }
+}, 20 );
+```
+
+---
+
+## ② Donation Creation Layer — `class-donations.php`
+
+### `giftflow_donation_validate` — filter
+
+Custom validation gate. Return a `WP_Error` to block the donation from being created.
+
+```
+Type:       filter
+Parameters: true|WP_Error $valid, array $data
+Returns:    true|WP_Error
+Source:     class-donations.php :: validate_donation_data()
+```
+
+```php
+add_filter( 'giftflow_donation_validate', function( $valid, $data ) {
+    if ( empty( $data['campaign_id'] ) ) {
+        return new WP_Error( 'no_campaign', 'A campaign must be selected.' );
+    }
+    return $valid;
+}, 10, 2 );
+```
+
+---
+
+### `giftflow_donation_before_create` — filter + action
+
+Available in two forms. The **filter** runs first and lets you modify donation data before it reaches `wp_insert_post`. The **action** fires right after and is read-only (use for notifications/logging).
+
+```
+filter parameters: array $data
+filter returns:    array (modified data)
+
+action parameters: array $data
+Source: class-donations.php :: create()
+```
+
+```php
+// Filter — modify data
+add_filter( 'giftflow_donation_before_create', function( $data ) {
+    $data['donor_name'] = ucwords( strtolower( $data['donor_name'] ) );
+    return $data;
+} );
+
+// Action — log or notify
+add_action( 'giftflow_donation_before_create', function( $data ) {
+    // fire-and-forget logging, not modifying data
+    error_log( 'Creating donation for: ' . $data['donor_email'] );
+} );
+```
+
+---
+
+### `giftflow_donation_post_data` — filter
+
+Modify the `WP_Post` data array that is passed to `wp_insert_post`. Useful for setting a custom post title or author.
+
+```
+Type:       filter
+Parameters: array $post_data, array $data
+Returns:    array
+Source:     class-donations.php :: create()
+```
+
+```php
+add_filter( 'giftflow_donation_post_data', function( $post_data, $data ) {
+    $post_data['post_title'] = 'Donation — ' . gmdate( 'Y-m-d H:i' );
+    return $post_data;
+}, 10, 2 );
+```
+
+---
+
+### `giftflow_donation_create_failed` — action
+
+Fires if `wp_insert_post` returns a `WP_Error`. Use for logging or alerting.
+
+```
+Type:       action
+Parameters: WP_Error $error, array $data
+Source:     class-donations.php :: create()
+```
+
+```php
+add_action( 'giftflow_donation_create_failed', function( $error, $data ) {
+    // Alert admin
+    wp_mail( get_option('admin_email'), 'Donation creation failed', $error->get_error_message() );
+}, 10, 2 );
+```
+
+---
+
+### `giftflow_donation_created` — action
+
+Fires after the donation post is inserted and all meta is saved. The donation is in `pending` status at this point — payment has not yet run.
+
+```
+Type:       action
+Parameters: int $donation_id, array $data
+Source:     class-donations.php :: create()
+```
+
+```php
+add_action( 'giftflow_donation_created', function( $donation_id, $data ) {
+    // Donation row exists in DB. Payment not yet processed.
+    update_post_meta( $donation_id, '_my_custom_meta', 'value' );
+}, 10, 2 );
+```
+
+---
+
+### `giftflow_donation_meta_saved` — action
+
+Fires at the very end of `save_donation_meta()`, after all native meta keys are written. Ideal for writing your own meta in the same save cycle.
+
+```
+Type:       action
+Parameters: int $donation_id, array $data
+Source:     class-donations.php :: save_donation_meta()
+```
+
+```php
+add_action( 'giftflow_donation_meta_saved', function( $donation_id, $data ) {
+    if ( ! empty( $data['my_custom_field'] ) ) {
+        update_post_meta( $donation_id, '_my_custom_field', sanitize_text_field( $data['my_custom_field'] ) );
+    }
+}, 10, 2 );
+```
+
+---
+
+## ③ Gateway Processing Layer
+
+### `giftflow_register_gateways` — action
+
+The single registration hook. All gateways must be instantiated inside this action — it fires inside `Gateway_Base::init_gateways()`.
+
+```
+Type:       action
+Parameters: none
+Source:     class-gateway-base.php :: init_gateways()
+```
+
+```php
+add_action( 'giftflow_register_gateways', function() {
+    new My_Custom_Gateway();
+} );
+```
+
+---
+
+### `giftflow_gateways_initialized` — action
+
+Fires after all gateways are registered and sorted by `$order`. The complete registry is passed as a parameter.
+
+```
+Type:       action
+Parameters: array $gateway_registry — [ id => Gateway_Base instance, ... ]
+Source:     class-gateway-base.php :: init_gateways()
+```
+
+```php
+add_action( 'giftflow_gateways_initialized', function( $registry ) {
+    // All gateways are now registered and sorted
+    foreach ( $registry as $id => $gateway ) {
+        if ( $gateway->is_enabled() ) {
+            // do something per enabled gateway
+        }
+    }
+} );
+```
+
+---
+
+### `giftflow_gateway_registered` — action
+
+Fires immediately after each individual gateway registers itself in the static registry.
+
+```
+Type:       action
+Parameters: string $gateway_id, Gateway_Base $gateway_instance
+Source:     class-gateway-base.php :: register_gateway()
+```
+
+```php
+add_action( 'giftflow_gateway_registered', function( $id, $gateway ) {
+    if ( 'stripe' === $id ) {
+        // custom Stripe initialization
+    }
+}, 10, 2 );
+```
+
+---
+
+### `giftflow_gateway_init_hooks` — action
+
+Fires at the end of each gateway's `init_hooks()` call. Use this to attach extra hooks to a specific gateway instance from outside the class.
+
+```
+Type:       action
+Parameters: Gateway_Base $gateway_instance
+Source:     class-gateway-base.php :: init_hooks()
+```
+
+```php
+add_action( 'giftflow_gateway_init_hooks', function( $gateway ) {
+    if ( $gateway->get_id() === 'stripe' ) {
+        // add extra Stripe-specific hooks
+    }
+} );
+```
+
+---
+
+### `giftflow_payment_gateways` — filter
+
+The gateway list used when rendering the payment step in the donation form. Each gateway's `add_gateway_to_list()` method hooks here automatically. Use it to add or remove gateways from the form.
+
+```
+Type:       filter
+Parameters: array $gateways — keyed by gateway ID
+Returns:    array
+Source:     class-gateway-base.php :: init_hooks()
+```
+
+```php
+// Remove a gateway from the donation form
+add_filter( 'giftflow_payment_gateways', function( $gateways ) {
+    unset( $gateways['direct_bank_transfer'] );
+    return $gateways;
+} );
+```
+
+---
+
+### `giftflow_payment_methods_settings` — filter
+
+Controls which settings fields appear in the **Settings → Payment** tab. Each gateway registers its own settings fields here. Used to add or modify payment gateway settings.
+
+```
+Type:       filter (hooked as action with return)
+Parameters: array $payment_fields
+Returns:    array
+Source:     class-gateway-base.php :: init_hooks()
+```
+
+```php
+add_filter( 'giftflow_payment_methods_settings', function( $fields ) {
+    // Add a custom global payment setting
+    $fields['my_setting'] = array(
+        'id'    => 'giftflow_my_setting',
+        'name'  => 'giftflow_payment_options[my_setting]',
+        'type'  => 'textfield',
+        'label' => __( 'My Setting', 'my-plugin' ),
+    );
+    return $fields;
+} );
+```
+
+---
+
+## ④ Stripe-Specific Hooks & Filters
+
+### `giftflow_stripe_prepare_payment_intent_data` — filter
+
+Modify the array sent to Stripe's `paymentIntents->create()`. Use this to add statement descriptors, metadata, or other Stripe-specific parameters.
+
+```
+Type:       filter
+Parameters: array $payment_intent_data, array $form_data, int $donation_id
+Returns:    array
+Source:     class-stripe.php :: prepare_payment_intent_data()
+```
+
+```php
+add_filter( 'giftflow_stripe_prepare_payment_intent_data', function( $intent_data, $form_data, $donation_id ) {
+    $intent_data['statement_descriptor'] = 'CHARITY ORG';
+    $intent_data['metadata']['custom_key'] = 'custom_value';
+    return $intent_data;
+}, 10, 3 );
+```
+
+---
+
+### `giftflow_stripe_customer_data` — filter
+
+Modify the customer object sent to `stripe->customers->create()` when a new Stripe Customer is being created for a recurring donation.
+
+```
+Type:       filter
+Parameters: array $customer_data, array $form_data, int $donation_id
+Returns:    array
+Source:     class-stripe.php :: get_or_create_stripe_customer()
+```
+
+```php
+add_filter( 'giftflow_stripe_customer_data', function( $customer_data, $form_data, $donation_id ) {
+    $customer_data['metadata']['site_id'] = get_current_blog_id();
+    return $customer_data;
+}, 10, 3 );
+```
+
+---
+
+### `giftflow_stripe_currency` — filter
+
+Override the currency code used in Stripe API calls.
+
+```
+Type:       filter
+Parameters: string $currency — default 'USD'
+Returns:    string
+Source:     class-stripe.php :: get_currency()
+```
+
+```php
+add_filter( 'giftflow_stripe_currency', function( $currency ) {
+    return 'EUR';
+} );
+```
+
+---
+
+### `giftflow_stripe_country_code` — filter
+
+Override the country code for Stripe's Payment Request Button (Apple Pay / Google Pay).
+
+```
+Type:       filter
+Parameters: string $country — default 'US'
+Returns:    string
+Source:     class-stripe.php :: get_country_code()
+```
+
+```php
+add_filter( 'giftflow_stripe_country_code', fn() => 'DE' );
+```
+
+---
+
+### `giftflow_stripe_gateway_supports` — filter
+
+Modify the `$supports` array for the Stripe gateway.
+
+```
+Type:       filter
+Parameters: array $supports, Stripe_Gateway $gateway
+Returns:    array
+Source:     class-stripe.php :: init_gateway()
+```
+
+```php
+add_filter( 'giftflow_stripe_gateway_supports', function( $supports ) {
+    $supports[] = 'recurring';
+    return $supports;
+}, 10, 2 );
+```
+
+---
+
+### `giftflow_stripe_payment_completed` — action
+
+Fires when a Stripe payment intent reaches `succeeded` status during the **synchronous** payment flow (form submission).
+
+```
+Type:       action
+Parameters: int $donation_id, string $transaction_id, array $payment_intent_data
+Source:     class-stripe.php :: handle_successful_payment_intent()
+```
+
+```php
+add_action( 'giftflow_stripe_payment_completed', function( $donation_id, $transaction_id, $intent_data ) {
+    // Send custom receipt, update CRM, etc.
+}, 10, 3 );
+```
+
+---
+
+### `giftflow_stripe_subscription_created` — action
+
+Fires when a new Stripe Subscription is successfully created (recurring donation first payment).
+
+```
+Type:       action
+Parameters: int $donation_id, string $subscription_id, array $subscription_data
+Source:     class-stripe.php :: process_recurring_payment()
+```
+
+```php
+add_action( 'giftflow_stripe_subscription_created', function( $donation_id, $sub_id, $sub_data ) {
+    // Store sub_id in your own table, notify admin, etc.
+}, 10, 3 );
+```
+
+---
+
+### `giftflow_stripe_recurring_renewal_created` — action
+
+Fires when a renewal donation post is created from a `invoice.paid` webhook (recurring only).
+
+```
+Type:       action
+Parameters: int $renewal_id, int $parent_donation_id, string $subscription_id, array $invoice_data
+Source:     class-stripe.php :: handle_invoice_paid()
+```
+
+```php
+add_action( 'giftflow_stripe_recurring_renewal_created', function( $renewal_id, $parent_id, $sub_id, $invoice ) {
+    // e.g. sync to external fundraising platform
+}, 10, 4 );
+```
+
+---
+
+### Stripe Webhook Action Hooks
+
+These fire inside the Stripe webhook handler (`wp_ajax_nopriv_giftflow_stripe_webhook`) when Stripe sends async events.
+
+| Hook | Fires On | Parameters |
+|---|---|---|
+| `giftflow_stripe_webhook_payment_completed` | `payment_intent.succeeded` | `$donation_id, $payment_intent` |
+| `giftflow_stripe_webhook_payment_failed` | `payment_intent.payment_failed` | `$donation_id, $payment_intent` |
+| `giftflow_stripe_webhook_payment_canceled` | `payment_intent.canceled` | `$donation_id, $payment_intent` |
+| `giftflow_stripe_webhook_charge_refunded` | `charge.refunded` | `$donation_id, $charge` |
+| `giftflow_stripe_recurring_payment_failed` | `invoice.payment_failed` | `$parent_donation_id, $subscription_id, $invoice` |
+| `giftflow_stripe_subscription_cancelled` | `customer.subscription.deleted` | `$parent_donation_id, $subscription_id, $subscription` |
+| `giftflow_stripe_subscription_updated` | `customer.subscription.updated` | `$parent_donation_id, $subscription_id, $subscription` |
+
+```php
+// Example — send a refund receipt on charge.refunded
+add_action( 'giftflow_stripe_webhook_charge_refunded', function( $donation_id, $charge ) {
+    $donation = giftflow_get_donation_data_by_id( $donation_id );
+    wp_mail( $donation->donor_email, 'Your refund has been processed', '...' );
+}, 10, 2 );
+
+// Example — handle subscription cancellation
+add_action( 'giftflow_stripe_subscription_cancelled', function( $donation_id, $sub_id, $sub ) {
+    update_post_meta( $donation_id, '_recurring_status', 'cancelled' );
+    do_action( 'giftflow_donation_after_payment_processed', $donation_id, false );
+}, 10, 3 );
+```
+
+---
+
+## ⑤ PayPal-Specific Hooks & Filters
+
+### `giftflow_paypal_gateway_supports` — filter
+
+Modify the `$supports` array for the PayPal gateway.
+
+```
+Type:       filter
+Parameters: array $supports, PayPal_Gateway $gateway
+Returns:    array
+Source:     class-paypal.php :: init_gateway()
+```
+
+---
+
+### `giftflow_paypal_prepare_payment_data` — filter
+
+Modify the payment data array before it is sent to PayPal's API (legacy payment flow).
+
+```
+Type:       filter
+Parameters: array $paypal_data, array $form_data, int $donation_id
+Returns:    array
+Source:     class-paypal.php :: prepare_payment_data()
+```
+
+```php
+add_filter( 'giftflow_paypal_prepare_payment_data', function( $data, $form_data, $donation_id ) {
+    $data['metadata']['source'] = 'landing_page_campaign';
+    return $data;
+}, 10, 3 );
+```
+
+---
+
+### `giftflow_paypal_payment_completed` — action
+
+Fires when a PayPal order capture completes successfully — both in the synchronous JS SDK capture flow and the legacy response flow.
+
+```
+Type:       action
+Parameters: int $donation_id, string $transaction_id, array $response_data
+Source:     class-paypal.php :: capture_paypal_order(), handle_successful_payment()
+```
+
+```php
+add_action( 'giftflow_paypal_payment_completed', function( $donation_id, $transaction_id, $data ) {
+    // Log or sync with external system
+}, 10, 3 );
+```
+
+---
+
+### PayPal Webhook Action Hooks
+
+These fire inside the PayPal webhook handler (`wp_ajax_nopriv_giftflow_paypal_webhook`).
+
+| Hook | Fires On | Parameters |
+|---|---|---|
+| `giftflow_paypal_webhook_payment_completed` | `PAYMENT.CAPTURE.COMPLETED` / `PAYMENT.SALE.COMPLETED` | `$donation_id, $resource` |
+| `giftflow_paypal_webhook_payment_denied` | `PAYMENT.CAPTURE.DENIED` / `PAYMENT.SALE.DENIED` | `$donation_id, $resource` |
+| `giftflow_paypal_webhook_payment_refunded` | `PAYMENT.CAPTURE.REFUNDED` / `PAYMENT.SALE.REFUNDED` | `$donation_id, $resource` |
+
+```php
+add_action( 'giftflow_paypal_webhook_payment_completed', function( $donation_id, $resource ) {
+    // Extra handling for PayPal webhook confirmation
+}, 10, 2 );
+```
+
+---
+
+## ⑥ Status Update Layer — `class-donations.php`
+
+### `giftflow_donation_before_status_update` — action
+
+Fires before `update_post_meta( $id, '_status', $new_status )` is called. Use it to intercept or prevent a status transition.
+
+```
+Type:       action
+Parameters: int $donation_id, string $new_status, string $old_status
+Source:     class-donations.php :: update_status()
+```
+
+```php
+add_action( 'giftflow_donation_before_status_update', function( $donation_id, $new_status, $old_status ) {
+    // Log the incoming transition
+    error_log( "Donation #{$donation_id}: {$old_status} → {$new_status}" );
+}, 10, 3 );
+```
+
+---
+
+### `giftflow_donation_status_updated` — action
+
+Fires after a status is successfully written to post meta. This is the authoritative hook for accurate status change tracking.
+
+```
+Type:       action
+Parameters: int $donation_id, string $new_status, string $old_status
+Source:     class-donations.php :: update_status()
+```
+
+```php
+add_action( 'giftflow_donation_status_updated', function( $donation_id, $new_status, $old_status ) {
+    if ( 'completed' === $new_status && 'pending' === $old_status ) {
+        // Trigger a campaign milestone check
+    }
+}, 10, 3 );
+```
+
+---
+
+### `giftflow_donation_status_{$status}` — dynamic action
+
+A dynamic hook that fires for each specific final status. Always fires **after** `giftflow_donation_status_updated`.
+
+Available: `giftflow_donation_status_completed`, `giftflow_donation_status_failed`, `giftflow_donation_status_refunded`, `giftflow_donation_status_cancelled`, `giftflow_donation_status_pending`.
+
+```
+Type:       action (dynamic)
+Parameters: int $donation_id, string $old_status
+Source:     class-donations.php :: update_status()
+```
+
+```php
+// React when a donation completes
+add_action( 'giftflow_donation_status_completed', function( $donation_id, $old_status ) {
+    // Send custom thank-you SMS, update leaderboard, etc.
+}, 10, 2 );
+
+// React when a donation is refunded
+add_action( 'giftflow_donation_status_refunded', function( $donation_id, $old_status ) {
+    // Adjust campaign totals or notify the team
+}, 10, 2 );
+```
+
+---
+
+### `giftflow_donation_valid_statuses` — filter
+
+Add custom status slugs to the validation allowlist.
+
+```
+Type:       filter
+Parameters: array $statuses — default: ['pending','completed','failed','refunded','cancelled']
+Returns:    array
+Source:     class-donations.php :: get_valid_statuses()
+```
+
+```php
+add_filter( 'giftflow_donation_valid_statuses', function( $statuses ) {
+    $statuses[] = 'on_hold';
+    return $statuses;
+} );
+```
+
+---
+
+## ⑦ Post-Payment Layer — `class-forms.php` + `mail.php`
+
+### `giftflow_donation_after_payment_processed` — action ⭐
+
+The most important hook in the entire payment pipeline. Fires after `process_payment()` returns without error. This is where notifications, user creation, and downstream integrations live.
+
+```
+Type:       action
+Parameters: int $donation_id, mixed $payment_result
+Source:     class-forms.php :: process_donation()
+            class-paypal.php :: capture_paypal_order() (also fires manually)
+```
+
+**Built-in subscribers (from `hooks.php` and `mail.php`):**
+
+| Priority | Function | Effect |
+|---|---|---|
+| 10 | `giftflow_send_mail_notification_donation_to_admin` | Sends admin notification email (always) |
+| 10 | `giftflow_auto_create_user_on_donation` | Creates WP user for first-time donor |
+| 12 | `giftflow_send_mail_thank_you_to_donor_payment_successful` | Sends donor thank-you email (only if `$payment_result === true`) |
+
+```php
+// Add your own post-payment logic
+add_action( 'giftflow_donation_after_payment_processed', function( $donation_id, $payment_result ) {
+    if ( $payment_result !== true ) {
+        return; // Skip if not a direct success
+    }
+
+    $donation = giftflow_get_donation_data_by_id( $donation_id );
+
+    // Example: sync to a CRM
+    my_crm_sync( array(
+        'email'    => $donation->donor_email,
+        'amount'   => $donation->amount,
+        'campaign' => $donation->campaign_name,
+    ) );
+}, 20, 2 );
+```
+
+:::warning Async payments (webhooks)
+For PayPal and Stripe, the synchronous `process_payment()` may return before the webhook confirms the payment. The gateway fires `giftflow_donation_after_payment_processed` again from the webhook handler when it gets the async confirmation. To avoid duplicate processing, always check `$payment_result === true` and consider setting a flag on the donation post.
+:::
+
+---
+
+## ⑧ Email Filter Hooks — `mail.php`
+
+These filters run inside the two email functions that are hooked to `giftflow_donation_after_payment_processed`.
+
+### Admin Notification Email
+
+```php
+// Modify all data passed to the admin email template
+add_filter( 'giftflow_new_donation_admin_email_args', function( $args, $donation_id, $donation_data ) {
+    $args['custom_note'] = 'Processed via mobile app';
+    return $args;
+}, 10, 3 );
+
+// Modify admin email subject line
+add_filter( 'giftflow_new_donation_admin_email_subject', function( $subject, $donation_id, $donation_data ) {
+    return '[URGENT] ' . $subject;
+}, 10, 3 );
+
+// Modify admin email header text
+add_filter( 'giftflow_new_donation_admin_email_header', function( $header, $donation_id, $donation_data ) {
+    return '🎉 New Donation Received';
+}, 10, 3 );
+```
+
+### Donor Thank-You Email
+
+```php
+// Modify all data passed to the donor thank-you template
+add_filter( 'giftflow_thanks_donor_email_args', function( $args, $donation_id, $donation_data ) {
+    $args['custom_message'] = 'Your receipt number is ' . $donation_id;
+    return $args;
+}, 10, 3 );
+
+// Modify donor email subject
+add_filter( 'giftflow_thanks_donor_email_subject', function( $subject, $donation_id, $donation_data ) {
+    return $subject . ' 🙏';
+}, 10, 3 );
+
+// Modify donor email header
+add_filter( 'giftflow_thanks_donor_email_header', function( $header, $donation_id, $donation_data ) {
+    return 'Thank you for making a difference!';
+}, 10, 3 );
+```
+
+---
+
+## ⑨ Bank Transfer — Specific Hook
+
+### `giftflow_bank_transfer_payment_pending` — action
+
+Fires at the end of Direct Bank Transfer's `process_payment()`. The donation is in `pending` status and awaiting manual confirmation.
+
+```
+Type:       action
+Parameters: int $donation_id, string $reference_number, array $data
+Source:     class-direct-bank-transfer.php :: process_payment()
+```
+
+```php
+add_action( 'giftflow_bank_transfer_payment_pending', function( $donation_id, $ref_number, $data ) {
+    // Email admin with reference number for manual matching
+    $msg = "New bank transfer pending.\nRef: {$ref_number}\nDonation: #{$donation_id}";
+    wp_mail( get_option('admin_email'), 'Bank Transfer Pending', $msg );
+}, 10, 3 );
+```
+
+---
+
+## Complete Hook Reference
+
+| # | Hook Name | Type | Fired By | Key Parameters |
+|---|---|---|---|---|
+| 1 | `giftflow_donation_form_fields` | filter | `class-forms.php` | `$fields` |
+| 2 | `giftflow_donation_form_before_process_donation` | action | `class-forms.php` | `$fields` |
+| 3 | `giftflow_donation_validate` | filter | `class-donations.php` | `$valid, $data` |
+| 4 | `giftflow_donation_before_create` | filter+action | `class-donations.php` | `$data` |
+| 5 | `giftflow_donation_post_data` | filter | `class-donations.php` | `$post_data, $data` |
+| 6 | `giftflow_donation_create_failed` | action | `class-donations.php` | `$error, $data` |
+| 7 | `giftflow_donation_created` | action | `class-donations.php` | `$donation_id, $data` |
+| 8 | `giftflow_donation_meta_saved` | action | `class-donations.php` | `$donation_id, $data` |
+| 9 | `giftflow_register_gateways` | action | `class-gateway-base.php` | — |
+| 10 | `giftflow_gateways_initialized` | action | `class-gateway-base.php` | `$registry` |
+| 11 | `giftflow_gateway_registered` | action | `class-gateway-base.php` | `$id, $instance` |
+| 12 | `giftflow_gateway_init_hooks` | action | `class-gateway-base.php` | `$instance` |
+| 13 | `giftflow_payment_gateways` | filter | `class-gateway-base.php` | `$gateways` |
+| 14 | `giftflow_payment_methods_settings` | filter | `class-gateway-base.php` | `$fields` |
+| 15 | `giftflow_stripe_prepare_payment_intent_data` | filter | `class-stripe.php` | `$intent_data, $data, $id` |
+| 16 | `giftflow_stripe_customer_data` | filter | `class-stripe.php` | `$customer_data, $data, $id` |
+| 17 | `giftflow_stripe_currency` | filter | `class-stripe.php` | `$currency` |
+| 18 | `giftflow_stripe_country_code` | filter | `class-stripe.php` | `$country` |
+| 19 | `giftflow_stripe_gateway_supports` | filter | `class-stripe.php` | `$supports, $gateway` |
+| 20 | `giftflow_stripe_payment_completed` | action | `class-stripe.php` | `$donation_id, $txn_id, $data` |
+| 21 | `giftflow_stripe_subscription_created` | action | `class-stripe.php` | `$donation_id, $sub_id, $data` |
+| 22 | `giftflow_stripe_recurring_renewal_created` | action | `class-stripe.php` | `$renewal_id, $parent_id, $sub_id, $invoice` |
+| 23 | `giftflow_stripe_webhook_payment_completed` | action | `class-stripe.php` | `$donation_id, $payment_intent` |
+| 24 | `giftflow_stripe_webhook_payment_failed` | action | `class-stripe.php` | `$donation_id, $payment_intent` |
+| 25 | `giftflow_stripe_webhook_payment_canceled` | action | `class-stripe.php` | `$donation_id, $payment_intent` |
+| 26 | `giftflow_stripe_webhook_charge_refunded` | action | `class-stripe.php` | `$donation_id, $charge` |
+| 27 | `giftflow_stripe_recurring_payment_failed` | action | `class-stripe.php` | `$donation_id, $sub_id, $invoice` |
+| 28 | `giftflow_stripe_subscription_cancelled` | action | `class-stripe.php` | `$donation_id, $sub_id, $subscription` |
+| 29 | `giftflow_stripe_subscription_updated` | action | `class-stripe.php` | `$donation_id, $sub_id, $subscription` |
+| 30 | `giftflow_paypal_gateway_supports` | filter | `class-paypal.php` | `$supports, $gateway` |
+| 31 | `giftflow_paypal_prepare_payment_data` | filter | `class-paypal.php` | `$data, $form_data, $id` |
+| 32 | `giftflow_paypal_payment_completed` | action | `class-paypal.php` | `$donation_id, $txn_id, $data` |
+| 33 | `giftflow_paypal_webhook_payment_completed` | action | `class-paypal.php` | `$donation_id, $resource` |
+| 34 | `giftflow_paypal_webhook_payment_denied` | action | `class-paypal.php` | `$donation_id, $resource` |
+| 35 | `giftflow_paypal_webhook_payment_refunded` | action | `class-paypal.php` | `$donation_id, $resource` |
+| 36 | `giftflow_donation_before_status_update` | action | `class-donations.php` | `$donation_id, $new, $old` |
+| 37 | `giftflow_donation_status_updated` | action | `class-donations.php` | `$donation_id, $new, $old` |
+| 38 | `giftflow_donation_status_{$status}` | dynamic action | `class-donations.php` | `$donation_id, $old_status` |
+| 39 | `giftflow_donation_valid_statuses` | filter | `class-donations.php` | `$statuses` |
+| 40 | `giftflow_donation_after_payment_processed` | action ⭐ | `class-forms.php` / gateways | `$donation_id, $payment_result` |
+| 41 | `giftflow_new_donation_admin_email_args` | filter | `mail.php` | `$args, $donation_id, $data` |
+| 42 | `giftflow_new_donation_admin_email_subject` | filter | `mail.php` | `$subject, $donation_id, $data` |
+| 43 | `giftflow_new_donation_admin_email_header` | filter | `mail.php` | `$header, $donation_id, $data` |
+| 44 | `giftflow_thanks_donor_email_args` | filter | `mail.php` | `$args, $donation_id, $data` |
+| 45 | `giftflow_thanks_donor_email_subject` | filter | `mail.php` | `$subject, $donation_id, $data` |
+| 46 | `giftflow_thanks_donor_email_header` | filter | `mail.php` | `$header, $donation_id, $data` |
+| 47 | `giftflow_bank_transfer_payment_pending` | action | `class-direct-bank-transfer.php` | `$donation_id, $ref, $data` |

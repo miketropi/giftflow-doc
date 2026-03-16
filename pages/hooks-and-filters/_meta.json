@@ -1,0 +1,11 @@
+{
+  "developer-guide-template-override": {
+    "title": "Template Override"
+  },
+  "developer-guide-metabox-settings": {
+    "title": "Metabox & Settings"
+  },
+  "payment-hooks-filters": {
+    "title": "Payment Hooks & Filters"
+  }
+}

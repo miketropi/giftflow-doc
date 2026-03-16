@@ -1,0 +1,480 @@
+---
+title: "Custom Settings Tab"
+description: "Step-by-step guide for adding a custom tab with your own settings fields to the GiftFlow Settings page, including all supported field types and how to read saved values."
+sidebar_position: 9
+tags:
+  - "giftflow"
+  - "developer"
+  - "settings"
+  - "admin"
+---
+
+GiftFlow's Settings page (`GiftFlow → Settings`) uses two filter hooks that make it straightforward to add your own tab with any number of fields, without touching any plugin file.
+
+---
+
+## How the Settings Page Works
+
+The settings page is driven by two parallel systems:
+
+**Tab navigation** — `giftflow_settings_tabs` filter adds your tab link to the nav bar.
+
+**Tab content** — `giftflow_settings_tabs` action renders your fields when the tab is active and `giftflow_general_settings` filter registers your option group, section, and fields with WordPress's Settings API.
+
+The page also uses a `switch` statement keyed on `?tab=` to call `settings_fields()` and `do_settings_sections()` for each built-in tab. For custom tabs that content switch is extended with `do_action( 'giftflow_settings_tabs', $active_tab )` — which is where your custom tab rendering hooks in.
+
+```
+?tab=general   → settings_fields('giftflow_general_options')
+?tab=payment   → settings_fields('giftflow_payment_options')
+?tab=email     → settings_fields('giftflow_email_options')
+?tab=my_tab    → do_action('giftflow_settings_tabs', 'my_tab')  ← your hook
+```
+
+---
+
+## Built-in Field Types
+
+Before building your tab, here are all the field types the `GiftFlow_Field` renderer supports:
+
+| Type | Description |
+|---|---|
+| `text` / `textfield` | Single-line text input |
+| `textarea` | Multi-line textarea |
+| `select` | Dropdown select |
+| `switch` | Toggle on/off (checkbox styled as a switch) |
+| `currency` | Number input with currency symbol prefix |
+| `accordion` | Collapsible group containing sub-fields |
+| `html` | Raw HTML output (no input — useful for buttons, notices) |
+
+---
+
+## Complete Working Example
+
+The following code adds a **"My Plugin"** tab with four fields: a text field, a textarea, a select, and a toggle switch. All saved under the option name `my_plugin_options`.
+
+Place this code in your plugin file or your theme's `functions.php`.
+
+### Step 1 — Register the option group and fields
+
+```php
+/**
+ * Register My Plugin settings with GiftFlow.
+ * Hooks into giftflow_general_settings to add a new section + fields.
+ */
+add_filter( 'giftflow_general_settings', function( $settings ) {
+
+    $saved = get_option( 'my_plugin_options', array() );
+
+    $settings['my_plugin'] = array(
+
+        // The WordPress option name where all values are saved as an array.
+        'option_name' => 'my_plugin_options',
+
+        // The page slug used by add_settings_section() and add_settings_field().
+        // Must match what you pass to do_settings_sections() in Step 3.
+        'page'        => 'my-plugin-settings-page',
+
+        // A unique section ID.
+        'section'     => 'my_plugin_section',
+
+        // Title shown above the fields table.
+        'section_title' => __( 'My Plugin Settings', 'my-plugin' ),
+
+        // Callback for the section description paragraph.
+        'section_callback' => function() {
+            echo '<p>' . esc_html__( 'Configure settings for My Plugin.', 'my-plugin' ) . '</p>';
+        },
+
+        // Field definitions.
+        'fields' => array(
+
+            // --- Text field ---
+            'site_label' => array(
+                'id'          => 'my_plugin_site_label',
+                'name'        => 'my_plugin_options[site_label]',
+                'type'        => 'textfield',
+                'label'       => __( 'Site Label', 'my-plugin' ),
+                'value'       => $saved['site_label'] ?? '',
+                'description' => __( 'A short label shown in the donation widget.', 'my-plugin' ),
+            ),
+
+            // --- Textarea ---
+            'custom_message' => array(
+                'id'          => 'my_plugin_custom_message',
+                'name'        => 'my_plugin_options[custom_message]',
+                'type'        => 'textarea',
+                'label'       => __( 'Custom Message', 'my-plugin' ),
+                'value'       => $saved['custom_message'] ?? '',
+                'rows'        => 4,
+                'description' => __( 'Message displayed after a successful donation.', 'my-plugin' ),
+            ),
+
+            // --- Select dropdown ---
+            'display_mode' => array(
+                'id'          => 'my_plugin_display_mode',
+                'name'        => 'my_plugin_options[display_mode]',
+                'type'        => 'select',
+                'label'       => __( 'Display Mode', 'my-plugin' ),
+                'value'       => $saved['display_mode'] ?? 'modal',
+                'options'     => array(
+                    'modal'    => __( 'Modal popup', 'my-plugin' ),
+                    'inline'   => __( 'Inline', 'my-plugin' ),
+                    'redirect' => __( 'Redirect to page', 'my-plugin' ),
+                ),
+                'description' => __( 'How the donation form is displayed.', 'my-plugin' ),
+            ),
+
+            // --- Switch (toggle) ---
+            'show_progress_bar' => array(
+                'id'          => 'my_plugin_show_progress_bar',
+                'name'        => 'my_plugin_options[show_progress_bar]',
+                'type'        => 'switch',
+                'label'       => __( 'Show Progress Bar', 'my-plugin' ),
+                'value'       => $saved['show_progress_bar'] ?? false,
+                'description' => __( 'Display the campaign progress bar on the donation form.', 'my-plugin' ),
+            ),
+
+        ),
+    );
+
+    return $settings;
+} );
+```
+
+### Step 2 — Add the tab to the navigation bar
+
+```php
+/**
+ * Add "My Plugin" tab to GiftFlow Settings navigation.
+ */
+add_filter( 'giftflow_settings_tabs', function( $tabs ) {
+    $tabs['my_plugin'] = __( 'My Plugin', 'my-plugin' );
+    return $tabs;
+} );
+```
+
+### Step 3 — Render the fields when the tab is active
+
+```php
+/**
+ * Render the My Plugin settings fields when the tab is active.
+ * GiftFlow calls do_action('giftflow_settings_tabs', $active_tab)
+ * for any tab not handled by the built-in switch statement.
+ */
+add_action( 'giftflow_settings_tabs', function( $active_tab ) {
+    if ( 'my_plugin' !== $active_tab ) {
+        return;
+    }
+
+    // Output the WordPress nonce and hidden fields for this option group.
+    settings_fields( 'my_plugin_options' );
+
+    // Render the section description + all registered fields.
+    do_settings_sections( 'my-plugin-settings-page' );
+} );
+```
+
+### Step 4 — Register the option for sanitization
+
+WordPress needs the option name to be explicitly allowed before it will save it. Add this alongside your other hooks:
+
+```php
+/**
+ * Allow WordPress to save my_plugin_options via options.php.
+ */
+add_action( 'admin_init', function() {
+    register_setting(
+        'my_plugin_options',       // option group (matches settings_fields() arg)
+        'my_plugin_options',       // option name in wp_options
+        array(
+            'sanitize_callback' => 'giftflow_sanitize_settings_callback',
+            'default'           => array(),
+        )
+    );
+} );
+```
+
+:::tip Reuse GiftFlow's sanitizer
+`giftflow_sanitize_settings_callback` recursively sanitizes any array of settings values. It auto-detects emails, URLs, template content, API keys, and booleans — so it works well for most custom option sets without writing your own sanitizer.
+:::
+
+---
+
+## Reading Saved Values
+
+Once the settings are saved you can read them anywhere using `get_option()` or GiftFlow's `giftflow_get_options()` helper:
+
+```php
+// Read the entire options array
+$options = get_option( 'my_plugin_options', array() );
+$label   = $options['site_label']       ?? '';
+$message = $options['custom_message']   ?? '';
+$mode    = $options['display_mode']     ?? 'modal';
+$bar     = $options['show_progress_bar'] ?? false;
+
+// Or use the GiftFlow helper for a single value
+$label = giftflow_get_options( 'site_label', 'my_plugin_options', '' );
+$mode  = giftflow_get_options( 'display_mode', 'my_plugin_options', 'modal' );
+```
+
+---
+
+## Field Type Examples
+
+### Accordion (grouped sub-fields)
+
+Use `accordion` to nest related fields under a collapsible heading — the same pattern used by the Stripe and PayPal gateway settings.
+
+```php
+'my_api_group' => array(
+    'id'    => 'my_plugin_api_group',
+    'name'  => 'my_plugin_options[my_api_group]',
+    'type'  => 'accordion',
+    'label' => __( 'External API', 'my-plugin' ),
+    'description' => __( 'Connect to the external API.', 'my-plugin' ),
+    'accordion_settings' => array(
+        'label'   => __( 'API Settings', 'my-plugin' ),
+        'is_open' => true,        // expanded by default
+        'fields'  => array(
+
+            'api_enabled' => array(
+                'id'          => 'my_plugin_api_enabled',
+                'type'        => 'switch',
+                'label'       => __( 'Enable API', 'my-plugin' ),
+                'value'       => $saved['my_api_group']['api_enabled'] ?? false,
+                'description' => __( 'Turn on external API integration.', 'my-plugin' ),
+            ),
+
+            'api_key' => array(
+                'id'          => 'my_plugin_api_key',
+                'type'        => 'text',
+                'label'       => __( 'API Key', 'my-plugin' ),
+                'value'       => $saved['my_api_group']['api_key'] ?? '',
+                'description' => __( 'Paste your API key here.', 'my-plugin' ),
+            ),
+
+            'api_secret' => array(
+                'id'          => 'my_plugin_api_secret',
+                'type'        => 'text',
+                'label'       => __( 'API Secret', 'my-plugin' ),
+                'value'       => $saved['my_api_group']['api_secret'] ?? '',
+                'description' => __( 'Paste your API secret here.', 'my-plugin' ),
+            ),
+
+        ),
+    ),
+),
+```
+
+Reading accordion values (they are nested one level deeper):
+
+```php
+$api_opts   = get_option( 'my_plugin_options', array() );
+$api_group  = $api_opts['my_api_group'] ?? array();
+$enabled    = $api_group['api_enabled'] ?? false;
+$api_key    = $api_group['api_key']     ?? '';
+$api_secret = $api_group['api_secret']  ?? '';
+```
+
+### HTML field (custom buttons or notices)
+
+Use `html` to inject any arbitrary HTML into the settings page — no saving, just display. Useful for test buttons, documentation links, or status indicators.
+
+```php
+'my_status_html' => array(
+    'id'    => 'my_plugin_status_html',
+    'name'  => 'my_plugin_options[my_status_html]',
+    'type'  => 'html',
+    'label' => __( 'Connection Status', 'my-plugin' ),
+    'html'  => my_plugin_render_status_html(),   // returns an HTML string
+),
+```
+
+```php
+function my_plugin_render_status_html() {
+    $api_key = giftflow_get_options( 'api_key', 'my_plugin_options' );
+    if ( empty( $api_key ) ) {
+        return '<p style="color:#d63638;">⚠ API key not set.</p>';
+    }
+    return '<p style="color:#00a32a;">✔ API key is configured.</p>';
+}
+```
+
+### Currency field
+
+```php
+'fee_amount' => array(
+    'id'          => 'my_plugin_fee_amount',
+    'name'        => 'my_plugin_options[fee_amount]',
+    'type'        => 'currency',
+    'label'       => __( 'Platform Fee', 'my-plugin' ),
+    'value'       => $saved['fee_amount'] ?? '2',
+    'min'         => '0',
+    'step'        => '0.5',
+    'description' => __( 'Fixed fee added to each transaction.', 'my-plugin' ),
+),
+```
+
+---
+
+## Complete File Reference
+
+Here is the full self-contained plugin file you can drop into `wp-content/plugins/` to see the custom tab working immediately:
+
+```php
+<?php
+/**
+ * Plugin Name: My Plugin — GiftFlow Settings Tab Example
+ * Description: Adds a custom settings tab to GiftFlow Settings.
+ * Version:     1.0.0
+ */
+
+if ( ! defined( 'ABSPATH' ) ) exit;
+
+// ─── 1. Register the option with WordPress ──────────────────────────────────
+add_action( 'admin_init', function() {
+    register_setting(
+        'my_plugin_options',
+        'my_plugin_options',
+        array(
+            'sanitize_callback' => 'giftflow_sanitize_settings_callback',
+            'default'           => array(),
+        )
+    );
+} );
+
+// ─── 2. Add the tab to GiftFlow's settings navigation ───────────────────────
+add_filter( 'giftflow_settings_tabs', function( $tabs ) {
+    $tabs['my_plugin'] = __( 'My Plugin', 'my-plugin' );
+    return $tabs;
+} );
+
+// ─── 3. Register section + fields via giftflow_general_settings ─────────────
+add_filter( 'giftflow_general_settings', function( $settings ) {
+    $saved = get_option( 'my_plugin_options', array() );
+
+    $settings['my_plugin'] = array(
+        'option_name'      => 'my_plugin_options',
+        'page'             => 'my-plugin-settings-page',
+        'section'          => 'my_plugin_section',
+        'section_title'    => __( 'My Plugin Settings', 'my-plugin' ),
+        'section_callback' => function() {
+            echo '<p>' . esc_html__( 'Configure settings for My Plugin.', 'my-plugin' ) . '</p>';
+        },
+        'fields' => array(
+
+            'site_label' => array(
+                'id'          => 'my_plugin_site_label',
+                'name'        => 'my_plugin_options[site_label]',
+                'type'        => 'textfield',
+                'label'       => __( 'Site Label', 'my-plugin' ),
+                'value'       => $saved['site_label'] ?? '',
+                'description' => __( 'Short label shown in the donation widget.', 'my-plugin' ),
+            ),
+
+            'custom_message' => array(
+                'id'          => 'my_plugin_custom_message',
+                'name'        => 'my_plugin_options[custom_message]',
+                'type'        => 'textarea',
+                'label'       => __( 'Custom Message', 'my-plugin' ),
+                'value'       => $saved['custom_message'] ?? '',
+                'rows'        => 4,
+                'description' => __( 'Message shown after a successful donation.', 'my-plugin' ),
+            ),
+
+            'display_mode' => array(
+                'id'          => 'my_plugin_display_mode',
+                'name'        => 'my_plugin_options[display_mode]',
+                'type'        => 'select',
+                'label'       => __( 'Display Mode', 'my-plugin' ),
+                'value'       => $saved['display_mode'] ?? 'modal',
+                'options'     => array(
+                    'modal'    => __( 'Modal popup', 'my-plugin' ),
+                    'inline'   => __( 'Inline', 'my-plugin' ),
+                    'redirect' => __( 'Redirect to page', 'my-plugin' ),
+                ),
+                'description' => __( 'How the donation form is displayed.', 'my-plugin' ),
+            ),
+
+            'show_progress_bar' => array(
+                'id'          => 'my_plugin_show_progress_bar',
+                'name'        => 'my_plugin_options[show_progress_bar]',
+                'type'        => 'switch',
+                'label'       => __( 'Show Progress Bar', 'my-plugin' ),
+                'value'       => $saved['show_progress_bar'] ?? false,
+                'description' => __( 'Display the campaign progress bar on the form.', 'my-plugin' ),
+            ),
+
+            'api_group' => array(
+                'id'    => 'my_plugin_api_group',
+                'name'  => 'my_plugin_options[api_group]',
+                'type'  => 'accordion',
+                'label' => __( 'External API', 'my-plugin' ),
+                'description' => __( 'Connect to an external service.', 'my-plugin' ),
+                'accordion_settings' => array(
+                    'label'   => __( 'API Settings', 'my-plugin' ),
+                    'is_open' => true,
+                    'fields'  => array(
+                        'api_enabled' => array(
+                            'id'          => 'my_plugin_api_enabled',
+                            'type'        => 'switch',
+                            'label'       => __( 'Enable API', 'my-plugin' ),
+                            'value'       => $saved['api_group']['api_enabled'] ?? false,
+                            'description' => __( 'Enable external API integration.', 'my-plugin' ),
+                        ),
+                        'api_key' => array(
+                            'id'          => 'my_plugin_api_key',
+                            'type'        => 'text',
+                            'label'       => __( 'API Key', 'my-plugin' ),
+                            'value'       => $saved['api_group']['api_key'] ?? '',
+                            'description' => __( 'Your API key.', 'my-plugin' ),
+                        ),
+                    ),
+                ),
+            ),
+
+        ),
+    );
+
+    return $settings;
+} );
+
+// ─── 4. Render the fields when the tab is active ─────────────────────────────
+add_action( 'giftflow_settings_tabs', function( $active_tab ) {
+    if ( 'my_plugin' !== $active_tab ) {
+        return;
+    }
+    settings_fields( 'my_plugin_options' );
+    do_settings_sections( 'my-plugin-settings-page' );
+} );
+```
+
+---
+
+## How Saving Works
+
+The settings page wraps everything in a single `<form method="post" action="options.php">`. When the user clicks **Save Settings**, WordPress's `options.php` handler processes all fields that belong to the currently active option group (determined by the `settings_fields()` nonce). Your option group `my_plugin_options` is saved to `wp_options` under the key `my_plugin_options` as a serialized array.
+
+```
+POST options.php
+  └── option_page = my_plugin_options   (from settings_fields())
+  └── my_plugin_options[site_label]     = "My Site"
+  └── my_plugin_options[display_mode]   = "inline"
+  └── my_plugin_options[show_progress_bar] = "1"
+           │
+           ▼
+  giftflow_sanitize_settings_callback() runs recursively
+           │
+           ▼
+  wp_options row: my_plugin_options = { site_label: "My Site", ... }
+```
+
+---
+
+## Hook & Filter Summary
+
+| Hook | Type | Purpose |
+|---|---|---|
+| `giftflow_settings_tabs` | **filter** | Add your tab slug and label to the nav bar |
+| `giftflow_settings_tabs` | **action** | Render your tab content (`settings_fields` + `do_settings_sections`) |
+| `giftflow_general_settings` | **filter** | Register your option group, section, and fields with the Settings API |

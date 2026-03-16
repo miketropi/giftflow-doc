@@ -1,0 +1,24 @@
+{
+  "index": "Introduction",
+  "usage": "Usage",
+  "helper-functions-reference": "Helper Functions Reference",
+  "blocks-and-shortcodes": "Blocks and Shortcodes",
+  "hooks-and-filters": "Hooks and Filters",
+  "examples": "Examples",
+  "about": {
+    "title": "About Us",
+    "type": "page"
+  },
+  "download": {
+    "title": "Download",
+    "type": "page",
+    "href": "https://wordpress.org/plugins/giftflow/",
+    "newWindow": true
+  },
+  "contact": {
+    "title": "Contact ↗",
+    "type": "page",
+    "href": "mailto:bearsthemes+supportgiftflow@gmail.com",
+    "newWindow": true
+  }
+}

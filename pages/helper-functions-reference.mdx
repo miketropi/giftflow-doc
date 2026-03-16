@@ -1,0 +1,820 @@
+---
+title: "Helper Functions Reference"
+description: "Complete reference for all public helper functions in GiftFlow's common.php, grouped by category with signatures, return types, and usage examples."
+sidebar_position: 5
+tags:
+  - "giftflow"
+  - "developer"
+  - "helper-functions"
+  - "api"
+---
+
+All functions listed here are globally available after GiftFlow loads. They live in `includes/common.php` and cover campaign data, donations, donors, currency, templates, settings pages, and utility helpers.
+
+---
+
+## 🎯 Campaign Functions
+
+### `giftflow_get_campaign_raised_amount()`
+```php
+giftflow_get_campaign_raised_amount( int $campaign_id ): float
+```
+Returns the total sum of all **completed** donations for a campaign.
+
+```php
+$raised = giftflow_get_campaign_raised_amount( 42 );
+// → 1250.00
+```
+
+---
+
+### `giftflow_get_campaign_goal_amount()`
+```php
+giftflow_get_campaign_goal_amount( int $campaign_id ): string
+```
+Returns the raw goal amount stored in `_goal_amount` post meta.
+
+```php
+$goal = giftflow_get_campaign_goal_amount( 42 );
+// → '5000'
+```
+
+---
+
+### `giftflow_get_campaign_progress_percentage()`
+```php
+giftflow_get_campaign_progress_percentage( int $campaign_id ): float
+```
+Returns the progress as a percentage (0–100), rounded to 2 decimal places. Returns `0` if there is no goal set.
+
+```php
+$pct = giftflow_get_campaign_progress_percentage( 42 );
+// → 25.00
+```
+
+---
+
+### `giftflow_display_campaign_progress()`
+```php
+giftflow_display_campaign_progress( int $campaign_id ): string
+```
+Returns a ready-to-echo HTML progress bar string showing raised amount, goal, and percentage.
+
+```php
+echo giftflow_display_campaign_progress( 42 );
+// → <div class="campaign-progress">...</div>
+```
+
+---
+
+### `giftflow_get_campaign_days_left()`
+```php
+giftflow_get_campaign_days_left( int $campaign_id ): int|false|string
+```
+Returns the number of days remaining in a campaign. Returns:
+- `false` — campaign hasn't started yet
+- `''` (empty string) — no end date set (indefinite)
+- `true` — campaign has already ended
+- `int` — number of days left (always `≥ 1`)
+
+Filterable via `giftflow_get_campaign_days_left`.
+
+```php
+$days = giftflow_get_campaign_days_left( 42 );
+
+if ( $days === false ) {
+    echo 'Not started yet';
+} elseif ( $days === true ) {
+    echo 'Campaign ended';
+} elseif ( $days === '' ) {
+    echo 'No end date';
+} else {
+    echo $days . ' days left';
+}
+```
+
+---
+
+### `giftflow_get_campaign_donations()`
+```php
+giftflow_get_campaign_donations(
+    int $campaign_id,
+    array $args = [],
+    int $paged = 1
+): array
+```
+Returns a paginated list of donations for a campaign. The returned array has three keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `posts` | `array` | Donation records (each includes donor meta, amount, status, etc.) |
+| `total` | `int` | Total number of matching donations |
+| `pagination` | `int` | Total number of pages |
+
+```php
+$result = giftflow_get_campaign_donations( 42, [], 1 );
+
+foreach ( $result['posts'] as $donation ) {
+    echo $donation['amount_formatted']; // e.g. $25.00
+    echo $donation['donor_meta']['name'];
+    echo $donation['status'];           // completed, pending, etc.
+}
+
+echo 'Total: ' . $result['total'];
+echo 'Pages: ' . $result['pagination'];
+```
+
+Each donation record includes: `id`, `amount`, `amount_formatted`, `payment_method`, `status`, `transaction_id`, `donor_id`, `donor_meta`, `campaign_id`, `message`, `is_anonymous`, `date`, `date_gmt`.
+
+---
+
+### `giftflow_prepare_campaign_status_bar_data()`
+```php
+giftflow_prepare_campaign_status_bar_data( int $post_id ): array
+```
+Assembles all data needed to render the campaign status bar block. Used internally by the `[giftflow_campaign_status_bar]` shortcode, but useful anywhere you need aggregated campaign stats in one call.
+
+Returns: `post_id`, `goal_amount`, `raised_amount`, `progress_percentage`, `days_left`, `donation_count`, `raised_amount_formatted`, `goal_amount_formatted`.
+
+Filterable via `giftflow_campaign_status_bar_data`.
+
+```php
+$data = giftflow_prepare_campaign_status_bar_data( 42 );
+
+echo $data['raised_amount_formatted']; // $1,250.00
+echo $data['progress_percentage'];     // 25.0
+echo $data['donation_count'];          // 18
+echo $data['days_left'];               // 12
+```
+
+---
+
+### `giftflow_process_bar_of_campaign_donations()`
+```php
+giftflow_process_bar_of_campaign_donations( int $campaign_id ): void
+```
+Directly echoes a minimal inline-styled HTML progress bar. Useful for quick output inside custom templates when you don't need the full status bar block.
+
+```php
+giftflow_process_bar_of_campaign_donations( 42 );
+// Echoes: <div class="giftflow-campaign-progress-bar">...</div>
+```
+
+---
+
+### `giftflow_get_preset_donation_amounts()`
+```php
+giftflow_get_preset_donation_amounts(): string
+```
+Returns the global default preset amounts as a comma-separated string from settings (e.g. `'10, 25, 35'`).
+
+```php
+$amounts = giftflow_get_preset_donation_amounts();
+// → '10, 25, 35'
+```
+
+---
+
+### `giftflow_get_preset_donation_amounts_by_campaign()`
+```php
+giftflow_get_preset_donation_amounts_by_campaign( int $campaign_id ): array
+```
+Returns the preset amounts configured specifically for a campaign as an array of `['amount' => float]` entries.
+
+```php
+$amounts = giftflow_get_preset_donation_amounts_by_campaign( 42 );
+// → [ ['amount' => 10.0], ['amount' => 50.0], ['amount' => 100.0] ]
+```
+
+---
+
+## 💰 Donation Functions
+
+### `giftflow_get_donation_data_by_id()`
+```php
+giftflow_get_donation_data_by_id( int $donation_id ): object|false
+```
+Returns a `WP_Post` object enriched with all donation meta properties. Returns `false` if the donation doesn't exist.
+
+**Added properties:**
+
+| Property | Description |
+|---|---|
+| `->amount` | Raw float amount |
+| `->__amount_formatted` | Formatted HTML amount span |
+| `->status` | `pending`, `completed`, `failed`, `refunded`, `cancelled` |
+| `->payment_method` | Gateway slug |
+| `->payment_method_label` | Human-readable gateway name |
+| `->donation_type` | `one-time` or `recurring` |
+| `->donor_name` | First + last name |
+| `->donor_email` | Donor email |
+| `->campaign_name` | Campaign title |
+| `->campaign_url` | Campaign permalink |
+| `->donation_edit_url` | Admin edit link |
+| `->message` | Donor message |
+| `->anonymous` | `yes` or `no` |
+| `->__date` | Formatted date |
+| `->__date_gmt` | GMT date |
+
+```php
+$donation = giftflow_get_donation_data_by_id( 99 );
+
+if ( $donation ) {
+    echo $donation->donor_name;
+    echo $donation->__amount_formatted;
+    echo $donation->campaign_name;
+    echo $donation->status;
+}
+```
+
+---
+
+### `giftflow_query_donation_by_donor_id()`
+```php
+giftflow_query_donation_by_donor_id(
+    int|string $donor_id,
+    int $page = 1,
+    int $per_page = 20,
+    array $filters = []
+): WP_Query
+```
+Queries donations for a specific donor with optional filters. Only returns one-time donations and recurring subscription parents (not renewal child records).
+
+**`$filters` keys:**
+
+| Key | Type | Description |
+|---|---|---|
+| `status` | `string` | Filter by donation status |
+| `payment_method` | `string` | Filter by gateway slug |
+| `date_from` | `string` | Start date `Y-m-d` |
+| `date_to` | `string` | End date `Y-m-d` |
+
+```php
+$query = giftflow_query_donation_by_donor_id(
+    $donor_id,
+    1,
+    20,
+    [ 'status' => 'completed', 'date_from' => '2024-01-01' ]
+);
+
+if ( $query->have_posts() ) {
+    while ( $query->have_posts() ) {
+        $query->the_post();
+        echo get_the_title();
+    }
+    wp_reset_postdata();
+}
+```
+
+---
+
+### `giftflow_get_donations_by_user()`
+```php
+giftflow_get_donations_by_user(
+    int $user_id,
+    int $page = 1,
+    int $per_page = 20,
+    array $filters = []
+): WP_Query
+```
+Convenience wrapper that looks up the donor record by the WordPress user's email, then calls `giftflow_query_donation_by_donor_id()`. Accepts the same `$filters` array.
+
+```php
+$query = giftflow_get_donations_by_user( get_current_user_id() );
+```
+
+---
+
+### `giftflow_get_donations_by_parent_id()`
+```php
+giftflow_get_donations_by_parent_id(
+    int $parent_donation_id,
+    array $filters = []
+): array
+```
+Returns all renewal/child donation posts belonging to a recurring subscription parent. `$filters` is an optional associative array of extra `meta_key => meta_value` conditions.
+
+```php
+$renewals = giftflow_get_donations_by_parent_id( 77 );
+
+foreach ( $renewals as $post ) {
+    echo get_post_meta( $post->ID, '_amount', true );
+}
+```
+
+---
+
+### `giftflow_get_donation_status_options()`
+```php
+giftflow_get_donation_status_options(): array
+```
+Returns the full map of status slugs to translated labels. Filterable via `giftflow_donation_status_options`.
+
+```php
+$options = giftflow_get_donation_status_options();
+// → [ 'pending' => 'Pending', 'completed' => 'Completed', ... ]
+```
+
+---
+
+### `giftflow_get_payment_methods_options()`
+```php
+giftflow_get_payment_methods_options(): array
+```
+Returns a map of registered gateway IDs to their display titles. Filterable via `giftflow_payment_methods_options`.
+
+```php
+$options = giftflow_get_payment_methods_options();
+// → [ 'stripe' => 'Credit Card (Stripe)', 'paypal' => 'PayPal', ... ]
+```
+
+---
+
+### `giftflow_donation_payment_template_tags()`
+```php
+giftflow_donation_payment_template_tags( object $donation_data ): string
+```
+Returns ready-to-echo HTML badge tags showing the payment method, donation type, recurring status, and recurring interval for a donation. Expects the object returned by `giftflow_get_donation_data_by_id()`.
+
+```php
+$d = giftflow_get_donation_data_by_id( 99 );
+echo giftflow_donation_payment_template_tags( $d );
+// → <div class="gfw-payment-method ...">Stripe</div>
+//   <div class="gfw-donation-type ...">One-time</div>
+```
+
+---
+
+### `giftflow_donation_type_label()`
+```php
+giftflow_donation_type_label( array $donation_types = [] ): string
+```
+Returns a human-readable label for the donation types array used in the form. If only one type is active it returns that type's label; if multiple are active it returns `"Select: One-time / Recurring"`.
+
+```php
+$label = giftflow_donation_type_label( $donation_types );
+// → 'One-time Donation'   (single)
+// → 'Select: One-time / Recurring'  (multiple)
+```
+
+---
+
+## 👤 Donor Functions
+
+### `giftflow_get_donor_data_by_id()`
+```php
+giftflow_get_donor_data_by_id( int $donor_id = 0 ): object|null
+```
+Returns a `WP_Post` object enriched with all donor contact meta. Returns `null` if the donor doesn't exist.
+
+**Added properties:** `->email`, `->first_name`, `->last_name`, `->phone`, `->address`, `->city`, `->state`, `->postal_code`, `->country`.
+
+```php
+$donor = giftflow_get_donor_data_by_id( 55 );
+
+if ( $donor ) {
+    echo $donor->first_name . ' ' . $donor->last_name;
+    echo $donor->email;
+    echo $donor->city . ', ' . $donor->country;
+}
+```
+
+---
+
+### `giftflow_get_donor_id_by_email()`
+```php
+giftflow_get_donor_id_by_email( string $email ): int
+```
+Looks up a donor by email address. If no donor exists, **creates a new donor record** automatically and fires `giftflow_donor_added`. Returns `0` on failure or invalid email.
+
+```php
+$donor_id = giftflow_get_donor_id_by_email( 'jane@example.com' );
+// Returns existing or newly created donor ID
+```
+
+---
+
+### `giftflow_get_donor_user_information()`
+```php
+giftflow_get_donor_user_information( int $user_id ): array
+```
+Bridges a WordPress user to their GiftFlow donor record, returning a merged array of both WP user data and donor contact meta.
+
+**Returns:** `user_id`, `first_name`, `last_name`, `email`, `donor_id`, `phone`, `address`, `city`, `state`, `postal_code`, `country`.
+
+```php
+$info = giftflow_get_donor_user_information( get_current_user_id() );
+
+echo $info['first_name'];
+echo $info['donor_id'];
+echo $info['phone'];
+```
+
+---
+
+## 💵 Currency Functions
+
+### `giftflow_get_options()`
+```php
+giftflow_get_options(
+    string $option,
+    string $group = 'giftflow_general_options',
+    string $value_default = ''
+): string
+```
+Safe single-value reader for any GiftFlow option group. The most general-purpose helper in the file.
+
+```php
+$currency   = giftflow_get_options( 'currency' );
+$min_amount = giftflow_get_options( 'min_amount', 'giftflow_general_options', 1 );
+$from_name  = giftflow_get_options( 'email_from_name', 'giftflow_email_options', '' );
+```
+
+---
+
+### `giftflow_get_current_currency()`
+```php
+giftflow_get_current_currency(): string
+```
+Returns the active currency code (e.g. `'USD'`). Defaults to `'USD'` if not set.
+
+```php
+$code = giftflow_get_current_currency(); // → 'USD'
+```
+
+---
+
+### `giftflow_get_currency_symbol()`
+```php
+giftflow_get_currency_symbol( string $currency ): string
+```
+Returns the symbol for a specific currency code.
+
+```php
+echo giftflow_get_currency_symbol( 'USD' ); // → $
+echo giftflow_get_currency_symbol( 'EUR' ); // → €
+echo giftflow_get_currency_symbol( 'GBP' ); // → £
+```
+
+---
+
+### `giftflow_get_currency_name()`
+```php
+giftflow_get_currency_name( string $currency ): string
+```
+Returns the full name of a currency from its code.
+
+```php
+echo giftflow_get_currency_name( 'USD' ); // → US Dollar
+```
+
+---
+
+### `giftflow_get_global_currency_symbol()`
+```php
+giftflow_get_global_currency_symbol(): string
+```
+Returns the symbol for the **currently active** site currency — a shortcut combining `giftflow_get_current_currency()` + `giftflow_get_currency_symbol()`.
+
+```php
+echo giftflow_get_global_currency_symbol(); // → $
+```
+
+---
+
+### `giftflow_get_currency_template()`
+```php
+giftflow_get_currency_template(): string
+```
+Returns the currency format template string from settings. Default: `'{{currency_symbol}}{{amount}}'`.
+
+```php
+$tpl = giftflow_get_currency_template();
+// → '{{currency_symbol}}{{amount}}'
+```
+
+---
+
+### `giftflow_get_currency_js_format_template()`
+```php
+giftflow_get_currency_js_format_template(): string
+```
+Returns a JS-friendly version of the currency template where `{{amount}}` is replaced with `{{value}}` and `{{currency_symbol}}` is resolved to the actual symbol. Used for client-side dynamic amount formatting.
+
+```php
+$js_tpl = giftflow_get_currency_js_format_template();
+// → '${{value}}'
+```
+
+---
+
+### `giftflow_render_currency_formatted_amount()`
+```php
+giftflow_render_currency_formatted_amount(
+    float $amount,
+    int $decimals = 2,
+    string|null $currency = null,
+    string $template = ''
+): string
+```
+Returns a formatted, ready-to-echo HTML `<span>` with the amount. Uses the active site currency and template by default. Filterable via `giftflow_render_currency_formatted_amount`.
+
+```php
+echo giftflow_render_currency_formatted_amount( 1250 );
+// → <span class="giftflow-currency-formatted-amount gfw-monofont">$1,250.00</span>
+
+echo giftflow_render_currency_formatted_amount( 99.9, 0 );
+// → <span ...>$100</span>
+
+echo giftflow_render_currency_formatted_amount( 500, 2, 'EUR' );
+// → <span ...>€500.00</span>
+```
+
+---
+
+### `giftflow_get_common_currency()`
+```php
+giftflow_get_common_currency(): array
+```
+Returns the full array of all supported currencies. Each entry has `code`, `symbol`, `name`, and `countries`. Filterable via `giftflow_common_currencies`.
+
+```php
+$currencies = giftflow_get_common_currency();
+// → [ ['code' => 'USD', 'symbol' => '$', 'name' => 'US Dollar', ...], ... ]
+```
+
+---
+
+## 📄 Template & Rendering Functions
+
+### `giftflow_load_template()`
+```php
+giftflow_load_template( string $template_name, array $args = [] ): void
+```
+The main template loader. Finds the template file (checking theme overrides first) and renders it with `$args` extracted as local variables. See the [Template Override Guide](./developer-guide-template-override) for the full lookup order.
+
+```php
+giftflow_load_template( 'campaign-grid.php', [
+    'campaigns'    => $campaigns,
+    'custom_class' => 'my-grid',
+] );
+
+giftflow_load_template( 'block/campaign-status-bar.php', $data );
+giftflow_load_template( 'email/thanks-donor.php', $email_args );
+```
+
+---
+
+### `giftflow_render_attributes()`
+```php
+giftflow_render_attributes( array $attributes ): string
+```
+Converts an associative array into a safely escaped HTML attribute string. Pass `true` as a value for boolean attributes (e.g. `disabled`, `readonly`). Skips `false`, `null`, and `''` values.
+
+```php
+$attrs = giftflow_render_attributes( [
+    'id'       => 'my-form',
+    'class'    => 'donation-form',
+    'data-id'  => 42,
+    'disabled' => true,
+    'hidden'   => false, // skipped
+] );
+
+echo "<form {$attrs}>";
+// → <form id="my-form" class="donation-form" data-id="42" disabled>
+```
+
+---
+
+### `giftflow_render_time_ago()`
+```php
+giftflow_render_time_ago( string $datetime ): string
+```
+Converts a datetime string into a human-friendly relative time string. Shows "X seconds/minutes/hours/days ago" for events within the last 3 days, and the raw datetime for anything older.
+
+```php
+echo giftflow_render_time_ago( '2025-01-01 10:00:00' );
+// → '2 hours ago'   (if within 3 days)
+// → '2025-01-01 10:00:00'  (if older than 3 days)
+// → 'just now'  (if < 10 seconds)
+```
+
+---
+
+### `giftflow_render_current_user_info()`
+```php
+giftflow_render_current_user_info(): void
+```
+Directly echoes an HTML block showing the currently logged-in donor's avatar, name, email, and a link to their donor profile page. Outputs nothing if the user is not logged in.
+
+```php
+// Inside a template:
+giftflow_render_current_user_info();
+// → <div class="giftflow-user-info">...</div>
+```
+
+---
+
+### `giftflow_svg_icon()`
+```php
+giftflow_svg_icon( string $name ): string
+```
+Returns an inline SVG string for a named icon from GiftFlow's icon library. Returns an empty string if the icon name is not found.
+
+```php
+echo wp_kses( giftflow_svg_icon( 'checkmark-circle' ), giftflow_allowed_svg_tags() );
+echo wp_kses( giftflow_svg_icon( 'error' ),            giftflow_allowed_svg_tags() );
+echo wp_kses( giftflow_svg_icon( 'user' ),             giftflow_allowed_svg_tags() );
+echo wp_kses( giftflow_svg_icon( 'shield-check' ),     giftflow_allowed_svg_tags() );
+```
+
+---
+
+### `giftflow_allowed_svg_tags()`
+```php
+giftflow_allowed_svg_tags(): array
+```
+Returns the `wp_kses`-compatible allowed tags array for safely outputting inline SVG. Covers `svg`, `path`, `g`, `circle`, `rect`, `polygon`, `line`, `ellipse`, and `title`. Filterable via `giftflow_allowed_svg_tags`.
+
+```php
+echo wp_kses( $my_svg_string, giftflow_allowed_svg_tags() );
+```
+
+---
+
+## 🔗 Page URL Functions
+
+### `giftflow_get_campaigns_page()`
+```php
+giftflow_get_campaigns_page(): int|string
+```
+Returns the page ID of the Campaigns page (from settings, or found by slug `campaigns`). Returns `''` if not found.
+
+```php
+$page_id = giftflow_get_campaigns_page();
+$url = get_permalink( $page_id );
+```
+
+---
+
+### `giftflow_get_donor_account_page()`
+```php
+giftflow_get_donor_account_page(): int|string
+```
+Returns the page ID of the Donor Account page (from settings, or found by slug `donor-account`).
+
+```php
+$url = get_permalink( giftflow_get_donor_account_page() );
+```
+
+---
+
+### `giftflow_get_thank_donor_page()`
+```php
+giftflow_get_thank_donor_page(): int|string
+```
+Returns the page ID of the Thank Donor page (from settings, or found by slug `thank-donor`).
+
+```php
+$thank_you_url = get_permalink( giftflow_get_thank_donor_page() );
+```
+
+---
+
+### `giftflow_get_donation_privacy_policy_page()`
+```php
+giftflow_get_donation_privacy_policy_page(): int|string
+```
+Returns the page ID of the Donation Privacy Policy page (slug: `donation-privacy-policy`).
+
+---
+
+### `giftflow_get_donation_terms_conditions_page()`
+```php
+giftflow_get_donation_terms_conditions_page(): int|string
+```
+Returns the page ID of the Donation Terms & Conditions page (slug: `donation-terms-conditions`).
+
+---
+
+## 👥 User & Role Functions
+
+### `giftflow_assign_donor_role()`
+```php
+giftflow_assign_donor_role( int $user_id ): bool
+```
+Assigns the `giftflow_donor` WordPress role to a user.
+
+```php
+giftflow_assign_donor_role( $user_id );
+```
+
+---
+
+### `giftflow_remove_donor_role()`
+```php
+giftflow_remove_donor_role( int $user_id ): bool
+```
+Removes the `giftflow_donor` role from a user.
+
+---
+
+### `giftflow_user_has_donor_role()`
+```php
+giftflow_user_has_donor_role( int $user_id ): bool
+```
+Returns `true` if the given user has the `giftflow_donor` role.
+
+```php
+if ( giftflow_user_has_donor_role( get_current_user_id() ) ) {
+    // show donor-only content
+}
+```
+
+---
+
+### `giftflow_get_role_manager()`
+```php
+giftflow_get_role_manager(): \GiftFlow\Core\Role
+```
+Returns the `Role` singleton instance for advanced role/capability operations.
+
+---
+
+## 🛠️ Utility Functions
+
+### `giftflow_sanitize_array()`
+```php
+giftflow_sanitize_array( array $data ): array
+```
+Recursively sanitizes an array. Applies `sanitize_key()` to keys and type-aware sanitization to values: `absint` for integers, cast to `float` for floats, `(bool)` for booleans, and `sanitize_text_field` for strings.
+
+```php
+$clean = giftflow_sanitize_array( $_POST );
+```
+
+---
+
+### `giftflow_get_file_content()`
+```php
+giftflow_get_file_content( string $file_path = '' ): string
+```
+Safely reads a file and returns its content as a string. Returns `''` if the file doesn't exist or is not readable. Filterable via `giftflow_get_file_content_filter`.
+
+```php
+$html = giftflow_get_file_content( GIFTFLOW_PLUGIN_DIR . 'block-templates/page-content/my-page.html' );
+```
+
+---
+
+## Quick Reference
+
+| Function | Category | Returns |
+|---|---|---|
+| `giftflow_get_campaign_raised_amount($id)` | Campaign | `float` |
+| `giftflow_get_campaign_goal_amount($id)` | Campaign | `string` |
+| `giftflow_get_campaign_progress_percentage($id)` | Campaign | `float` 0–100 |
+| `giftflow_display_campaign_progress($id)` | Campaign | `string` HTML |
+| `giftflow_get_campaign_days_left($id)` | Campaign | `int\|false\|string` |
+| `giftflow_get_campaign_donations($id, $args, $page)` | Campaign | `array` |
+| `giftflow_prepare_campaign_status_bar_data($id)` | Campaign | `array` |
+| `giftflow_process_bar_of_campaign_donations($id)` | Campaign | `void` (echoes) |
+| `giftflow_get_preset_donation_amounts()` | Campaign | `string` |
+| `giftflow_get_preset_donation_amounts_by_campaign($id)` | Campaign | `array` |
+| `giftflow_get_donation_data_by_id($id)` | Donation | `object\|false` |
+| `giftflow_query_donation_by_donor_id($id, $page, $per, $filters)` | Donation | `WP_Query` |
+| `giftflow_get_donations_by_user($user_id, $page, $per, $filters)` | Donation | `WP_Query` |
+| `giftflow_get_donations_by_parent_id($parent_id, $filters)` | Donation | `array` |
+| `giftflow_get_donation_status_options()` | Donation | `array` |
+| `giftflow_get_payment_methods_options()` | Donation | `array` |
+| `giftflow_donation_payment_template_tags($donation)` | Donation | `string` HTML |
+| `giftflow_donation_type_label($types)` | Donation | `string` |
+| `giftflow_get_donor_data_by_id($id)` | Donor | `object\|null` |
+| `giftflow_get_donor_id_by_email($email)` | Donor | `int` |
+| `giftflow_get_donor_user_information($user_id)` | Donor | `array` |
+| `giftflow_get_options($option, $group, $default)` | Settings | `string` |
+| `giftflow_get_current_currency()` | Currency | `string` |
+| `giftflow_get_currency_symbol($code)` | Currency | `string` |
+| `giftflow_get_currency_name($code)` | Currency | `string` |
+| `giftflow_get_global_currency_symbol()` | Currency | `string` |
+| `giftflow_get_currency_template()` | Currency | `string` |
+| `giftflow_get_currency_js_format_template()` | Currency | `string` |
+| `giftflow_render_currency_formatted_amount($amount, ...)` | Currency | `string` HTML |
+| `giftflow_get_common_currency()` | Currency | `array` |
+| `giftflow_load_template($name, $args)` | Template | `void` |
+| `giftflow_render_attributes($attrs)` | Template | `string` |
+| `giftflow_render_time_ago($datetime)` | Template | `string` |
+| `giftflow_render_current_user_info()` | Template | `void` (echoes) |
+| `giftflow_svg_icon($name)` | Template | `string` SVG |
+| `giftflow_allowed_svg_tags()` | Template | `array` |
+| `giftflow_get_campaigns_page()` | Pages | `int\|string` |
+| `giftflow_get_donor_account_page()` | Pages | `int\|string` |
+| `giftflow_get_thank_donor_page()` | Pages | `int\|string` |
+| `giftflow_get_donation_privacy_policy_page()` | Pages | `int\|string` |
+| `giftflow_get_donation_terms_conditions_page()` | Pages | `int\|string` |
+| `giftflow_assign_donor_role($user_id)` | User/Role | `bool` |
+| `giftflow_remove_donor_role($user_id)` | User/Role | `bool` |
+| `giftflow_user_has_donor_role($user_id)` | User/Role | `bool` |
+| `giftflow_get_role_manager()` | User/Role | `Role` instance |
+| `giftflow_sanitize_array($data)` | Utility | `array` |
+| `giftflow_get_file_content($path)` | Utility | `string` |

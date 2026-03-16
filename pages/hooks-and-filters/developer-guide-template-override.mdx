@@ -1,0 +1,382 @@
+---
+title: "Template Override Guide"
+description: "A developer guide for customizing and overriding GiftFlow plugin templates from your theme or a custom plugin."
+sidebar_position: 2
+tags:
+  - "giftflow"
+  - "developer"
+  - "templates"
+  - "customization"
+---
+
+GiftFlow uses a template hierarchy similar to WooCommerce — every front-end view is rendered from a PHP template file. These templates can be overridden from your **theme** or via **filter hooks**, without touching the plugin source, so your customizations survive plugin updates.
+
+---
+
+## How the Template Loader Works
+
+All templates are resolved through `GiftFlow\Frontend\Template`, specifically its `get_template_path()` method. When a template is requested, the loader follows this priority order:
+
+1. **Custom path** (via `giftflow_template_path` filter)
+2. **Active theme** — `yourtheme/{template-name}.php`
+3. **Active theme in subfolder** — `yourtheme/giftflow/{template-name}.php`
+4. **Plugin default** — `wp-content/plugins/giftflow/templates/{template-name}.php`
+
+The global helper function for loading a template is:
+
+```php
+giftflow_load_template( 'template-name.php', $args );
+```
+
+This is equivalent to:
+
+```php
+$template = new \GiftFlow\Frontend\Template();
+$template->load_template( 'template-name.php', $args );
+```
+
+Variables passed in the `$args` array are **extracted** and become local variables inside the template file.
+
+---
+
+## Method 1 — Theme Override (Recommended)
+
+The simplest approach. Copy the template file from the plugin into your theme, maintaining the same directory structure under a `giftflow/` subfolder.
+
+### Step 1: Locate the original template
+
+All plugin templates live in:
+
+```
+wp-content/plugins/giftflow/templates/
+```
+
+### Step 2: Copy it to your theme
+
+Mirror the same relative path under `yourtheme/giftflow/`:
+
+| Plugin Template | Theme Override Location |
+|---|---|
+| `templates/donation-form.php` | `yourtheme/giftflow/donation-form.php` |
+| `templates/campaign-grid.php` | `yourtheme/giftflow/campaign-grid.php` |
+| `templates/classic/single-campaign.php` | `yourtheme/giftflow/classic/single-campaign.php` |
+| `templates/classic/donor-account.php` | `yourtheme/giftflow/classic/donor-account.php` |
+| `templates/classic/taxonomy-campaign-archive.php` | `yourtheme/giftflow/classic/taxonomy-campaign-archive.php` |
+| `templates/block/donor-account.php` | `yourtheme/giftflow/block/donor-account.php` |
+| `templates/block/campaign-status-bar.php` | `yourtheme/giftflow/block/campaign-status-bar.php` |
+| `templates/email/thanks-donor.php` | `yourtheme/giftflow/email/thanks-donor.php` |
+
+### Step 3: Edit your copy
+
+Once copied, edit the theme file freely. The loader will automatically prefer your theme's version.
+
+:::tip
+Always copy **then** edit — never edit plugin files directly, as they'll be overwritten on update.
+:::
+
+---
+
+## Method 2 — Filter Hooks
+
+If you don't want to copy full template files, GiftFlow provides several filter hooks to swap or modify templates programmatically.
+
+### `giftflow_template_file`
+
+Intercept any template just before it is loaded. Return a different file path to redirect rendering to your own template.
+
+```php
+add_filter( 'giftflow_template_file', function( $template_file, $template_name, $args ) {
+    if ( $template_name === 'donation-form.php' ) {
+        return get_stylesheet_directory() . '/my-custom-donation-form.php';
+    }
+    return $template_file;
+}, 10, 3 );
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `$template_file` | `string` | Resolved absolute path to the template file |
+| `$template_name` | `string` | Relative template name (e.g. `donation-form.php`) |
+| `$args` | `array` | Data array passed to the template |
+
+### `giftflow_template_path`
+
+Override the base lookup path for a template. Useful for pointing GiftFlow at a custom directory.
+
+```php
+add_filter( 'giftflow_template_path', function( $template_path, $template_name ) {
+    // Redirect only the campaign grid template
+    if ( $template_name === 'campaign-grid.php' ) {
+        return get_stylesheet_directory() . '/giftflow-custom/';
+    }
+    return $template_path;
+}, 10, 2 );
+```
+
+### `giftflow_get_template_part`
+
+Override template parts loaded via `get_template_part()`.
+
+```php
+add_filter( 'giftflow_get_template_part', function( $template, $slug, $name ) {
+    // Custom override for a specific part
+    $custom = get_stylesheet_directory() . "/giftflow/{$slug}-{$name}.php";
+    if ( file_exists( $custom ) ) {
+        return $custom;
+    }
+    return $template;
+}, 10, 3 );
+```
+
+---
+
+## Method 3 — Action Hooks Inside Templates
+
+Many templates fire action hooks at key points, allowing you to **inject content** without replacing the entire template.
+
+### Donation Form Hooks
+
+```
+giftflow_donation_form_before_form         → Before the <form> content begins
+giftflow_donation_form_before_donor_information → Before the donor name/email fields
+giftflow_donation_form_after_donor_information  → After the donor fields (before anonymous checkbox)
+giftflow_donation_form_after_payment_method     → After the payment method step (thank-you & error sections)
+giftflow_donation_form_after_form          → After </form>
+```
+
+**Example — Add a custom field to the donor information section:**
+
+```php
+add_action( 'giftflow_donation_form_after_donor_information', function() {
+    ?>
+    <div class="donation-form__field">
+        <label for="donor_phone">Phone Number (optional)</label>
+        <input type="tel" id="donor_phone" name="donor_phone">
+    </div>
+    <?php
+} );
+```
+
+### Campaign Grid Hooks
+
+```
+giftflow_campaign_grid_before                    → Before the entire grid wrapper
+giftflow_campaign_grid_before_container          → Inside the wrapper, before items start
+giftflow_campaign_grid_before_item               → Before each campaign article, receives ($campaign, $campaign_id)
+giftflow_campaign_grid_before_item_content       → Inside each article, before content
+giftflow_campaign_grid_after_item_content        → Inside each article, after content
+giftflow_campaign_grid_after_item                → After each campaign article
+giftflow_campaign_grid_after_container           → After all items, before pagination
+giftflow_campaign_grid_before_pagination         → Before the pagination nav
+giftflow_campaign_grid_after_pagination          → After the pagination nav
+giftflow_campaign_grid_after                     → After the entire grid wrapper
+giftflow_campaign_grid_before_empty              → Inside empty state wrapper
+giftflow_campaign_grid_after_empty               → Inside empty state wrapper, after message
+```
+
+**Example — Add a badge to each campaign card:**
+
+```php
+add_action( 'giftflow_campaign_grid_before_item_content', function( $campaign, $campaign_id ) {
+    $is_featured = get_post_meta( $campaign_id, '_is_featured', true );
+    if ( $is_featured ) {
+        echo '<span class="my-featured-badge">⭐ Featured</span>';
+    }
+}, 10, 2 );
+```
+
+### Single Campaign Hooks
+
+```
+giftflow_campaign_single_before_content   → Before the campaign page block content
+giftflow_campaign_single_after_content    → After the campaign page block content
+```
+
+### Donor Account Hooks
+
+```
+giftflow_donor_account_before_content     → Before the donor account block content
+giftflow_donor_account_after_content      → After the donor account block content
+```
+
+### Campaign Taxonomy Archive Hooks
+
+```
+giftflow_campaign_taxonomy_archive_before_content  → Before archive block content
+giftflow_campaign_taxonomy_archive_after_content   → After archive block content
+```
+
+### Template Lifecycle Hooks
+
+These fire for **every** template load:
+
+```
+giftflow_before_template_load    → Fires before any template is included
+giftflow_after_template_load     → Fires after any template is included
+```
+
+Both receive `($template_name, $template_file, $args)`.
+
+---
+
+## Template Reference
+
+### Root Templates
+
+| File | Loaded By | Available Variables |
+|---|---|---|
+| `donation-form.php` | `[giftflow_donation_form]` shortcode | `$campaign_id`, `$gateways`, `$preset_donation_amounts`, `$raised_amount`, `$goal_amount`, `$default_amount`, `$campaign_title`, `$currency_symbol`, `$donation_types`, `$user_fullname`, `$user_email`, `$min_amount`, `$max_amount` |
+| `campaign-grid.php` | `[giftflow_campaign_grid]` shortcode | `$campaigns`, `$total`, `$pages`, `$current_page`, `$custom_class` |
+| `donation-form-thank-you.php` | After successful donation | Donation result args |
+| `donation-form-error.php` | On donation error | — |
+| `donation-list-of-campaign.php` | Campaign donation list | — |
+| `campaign-comment.php` | Campaign comments section | — |
+| `login-form.php` | Login UI | — |
+
+### `classic/` Templates (PHP theme templates)
+
+| File | Used For |
+|---|---|
+| `classic/single-campaign.php` | Single campaign page (classic themes) |
+| `classic/donor-account.php` | Donor account page (classic themes) |
+| `classic/taxonomy-campaign-archive.php` | Campaign category archive page |
+
+### `block/` Templates (Block rendering)
+
+| File | Used For |
+|---|---|
+| `block/campaign-status-bar.php` | Campaign progress/goal bar |
+| `block/donor-account.php` | Donor account block wrapper |
+| `block/donor-account--dashboard.php` | Dashboard tab |
+| `block/donor-account--my-account.php` | My Account tab |
+| `block/donor-account--my-donations.php` | My Donations list tab |
+| `block/donor-account--my-donations--detail.php` | Single donation detail view |
+| `block/donor-account--not-allowed.php` | Access denied state |
+| `block/donor-account--not-found.php` | Not found state |
+| `block/donations-filter-form.php` | Donations filter/search form |
+
+### `email/` Templates
+
+| File | Used For |
+|---|---|
+| `email/thanks-donor.php` | Thank-you email sent to donor |
+| `email/new-donation-admin.php` | New donation notification to admin |
+| `email/new-user.php` | Welcome email when donor account is created |
+| `email/template-default.php` | Base email layout wrapper |
+
+### `payment-gateway/` Templates
+
+| File | Used For |
+|---|---|
+| `payment-gateway/stripe-template.php` | Stripe payment form UI |
+| `payment-gateway/paypal-template.php` | PayPal payment button UI |
+| `payment-gateway/direct-bank-transfer-template.php` | Bank transfer instructions |
+
+---
+
+## Useful Filter Hooks for Template Data
+
+Beyond file-level overrides, these filters let you modify the **data** passed into templates:
+
+```php
+// Modify donation form field attributes
+add_filter( 'giftflow_form_donation_form_atts', function( $atts, $campaign_id ) {
+    $atts['min_amount'] = 5; // raise minimum to $5
+    return $atts;
+}, 10, 2 );
+
+// Add/remove donation types shown on the form
+add_filter( 'giftflow_form_donation_types', function( $donation_types, $campaign_id ) {
+    // Remove recurring option for a specific campaign
+    if ( $campaign_id === 42 ) {
+        $donation_types = array_filter( $donation_types, fn($t) => $t['name'] !== 'recurring' );
+    }
+    return $donation_types;
+}, 10, 2 );
+
+// Modify campaign status bar template data
+add_filter( 'giftflow_campaign_status_bar_data', function( $data, $post_id ) {
+    $data['custom_label'] = 'Help us reach the goal!';
+    return $data;
+}, 10, 2 );
+
+// Modify campaign grid query arguments
+add_filter( 'giftflow_campaign_grid_query_args', function( $args, $atts ) {
+    $args['meta_key']   = '_is_featured';
+    $args['meta_value'] = '1';
+    return $args;
+}, 10, 2 );
+
+// Change the "no campaigns found" message
+add_filter( 'giftflow_campaign_grid_empty_message', function( $message ) {
+    return 'There are no active campaigns right now. Check back soon!';
+} );
+
+// Modify the campaign grid item wrapper CSS class
+add_filter( 'giftflow_campaign_grid_wrapper_class', function( $class ) {
+    return $class . ' my-custom-grid-class';
+} );
+
+// Modify single campaign block content
+add_filter( 'giftflow_campaign_single_block_content', function( $block_content ) {
+    // You can replace or prepend/append to the Gutenberg block markup
+    return $block_content;
+} );
+```
+
+---
+
+## Worked Example — Custom Donation Form
+
+Here's a complete walkthrough of replacing the donation form template from a child theme.
+
+**1. Copy the template:**
+
+```bash
+mkdir -p wp-content/themes/my-child-theme/giftflow
+cp wp-content/plugins/giftflow/templates/donation-form.php \
+   wp-content/themes/my-child-theme/giftflow/donation-form.php
+```
+
+**2. Edit your copy** (`yourtheme/giftflow/donation-form.php`):
+
+```php
+<?php
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+// $campaign_id, $gateways, $campaign_title, etc. are all available here
+?>
+<div class="my-custom-donation-wrapper">
+    <h2>Support: <?php echo esc_html( $campaign_title ); ?></h2>
+
+    <form class="donation-form" id="donation-form-<?php echo esc_attr( $campaign_id ); ?>">
+        <?php do_action( 'giftflow_donation_form_before_form', $args ); ?>
+
+        <!-- Your custom layout here -->
+        <input type="hidden" name="campaign_id" value="<?php echo esc_attr( $campaign_id ); ?>">
+        <input type="hidden" name="wp_nonce" value="<?php echo esc_attr( wp_create_nonce( 'giftflow_donation_form' ) ); ?>">
+
+        <?php /* ... rest of your custom form ... */ ?>
+
+        <?php do_action( 'giftflow_donation_form_after_form', $args ); ?>
+    </form>
+</div>
+```
+
+:::warning Important
+Always keep the hidden fields `campaign_id`, `wp_nonce`, and `recurring_interval` in your custom form. GiftFlow's AJAX handler requires them to process the donation correctly.
+:::
+
+---
+
+## Tips & Best Practices
+
+- **Never edit plugin files directly.** Use theme overrides or filter hooks so your changes persist through plugin updates.
+- **Use child themes.** If you're customizing a parent theme, put GiftFlow overrides in your child theme's `giftflow/` subfolder.
+- **Keep action hooks intact.** When overriding a template, preserve the `do_action()` calls so other plugins and extensions can still hook in.
+- **Test with the default template first.** Before customizing, confirm the default template works correctly, then layer your changes on top.
+- **Email templates** use a base layout (`email/template-default.php`). Override individual email templates (e.g. `email/thanks-donor.php`) and they'll automatically inherit the base layout unless you replace that too.

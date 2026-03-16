@@ -1,0 +1,569 @@
+---
+title: "Blocks & Shortcodes"
+description: "Complete usage reference for all six GiftFlow Gutenberg blocks and three shortcodes — attributes, examples, hook extension points, and developer notes."
+sidebar_position: 7
+tags:
+  - "giftflow"
+  - "blocks"
+  - "shortcodes"
+  - "gutenberg"
+---
+
+GiftFlow ships with **6 Gutenberg blocks** and **3 shortcodes**. All blocks are server-side rendered and registered under the `giftflow` category. Shortcodes work in the Classic Editor, page builders, and anywhere WordPress shortcodes are supported.
+
+---
+
+## Gutenberg Blocks
+
+All blocks appear in the **GiftFlow** category in the block inserter. They are registered on the `init` hook and rendered server-side via PHP callbacks, so their output always reflects live data.
+
+---
+
+### 1. Donation Button — `giftflow/donation-button`
+
+Renders a styled button that opens the donation form modal for a specific campaign. When no campaign is selected, the block automatically uses the current post's ID (useful when placed inside a campaign's single post template).
+
+#### Attributes
+
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `campaignId` | `number` | `0` | Target campaign post ID. Falls back to `get_the_ID()` if `0`. |
+| `buttonText` | `string` | `'Donate Now'` | Label shown on the button |
+| `backgroundColor` | `string` | `'#000000'` | Button background color (hex) |
+| `textColor` | `string` | `'#ffffff'` | Button text color (hex) |
+| `borderRadius` | `number` | `0` | Border radius in pixels |
+| `fullWidth` | `boolean` | `false` | Stretch button to 100% container width |
+
+#### Block Editor Usage
+
+Add the block, then in the sidebar:
+- **Campaign** — select the campaign or leave blank to auto-detect from context
+- **Button Text** — customize the CTA
+- **Colors** — set background and text colors using the color pickers
+- **Full Width** — toggle to span the full container
+
+#### Example Block Markup
+
+```html
+<!-- wp:giftflow/donation-button {"campaignId":42,"buttonText":"Support Us","backgroundColor":"#ff7a00","fullWidth":true} /-->
+```
+
+#### Behaviour Notes
+
+- If the campaign post status is not `publish`, the button renders as **disabled** (opacity 0.6, `cursor: not-allowed`).
+- Clicking a live button calls `giftflow.donationButton_Handle(this)` on the frontend, which opens the donation form modal.
+- `data-campaign-id` and `data-campaign-title` are exposed as `data-` attributes for JavaScript.
+
+---
+
+### 2. Campaign Status Bar — `giftflow/campaign-status-bar`
+
+Displays real-time fundraising progress for a campaign — raised amount, goal, progress bar percentage, days left, and total donor count.
+
+#### Attributes
+
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `__editorPostId` | `number` | `0` | Used in the editor for server-side preview. Automatically set by Gutenberg. |
+
+#### Block Editor Usage
+
+Drop the block onto any campaign post. No manual configuration is needed — it reads `get_the_ID()` on the frontend. Inside the editor, it uses `__editorPostId` for the live preview.
+
+#### Example Block Markup
+
+```html
+<!-- wp:giftflow/campaign-status-bar {"__editorPostId":42} /-->
+```
+
+#### Data Available in Template
+
+The block calls `giftflow_prepare_campaign_status_bar_data( $post_id )` and passes the result to `block/campaign-status-bar.php`. Available template variables:
+
+| Variable | Type | Description |
+|---|---|---|
+| `$post_id` | `int` | Campaign post ID |
+| `$goal_amount` | `string` | Raw goal amount |
+| `$raised_amount` | `float` | Total raised (completed donations only) |
+| `$progress_percentage` | `float` | 0–100, rounded to 2 decimal places |
+| `$days_left` | `int\|false\|string` | See `giftflow_get_campaign_days_left()` |
+| `$donation_count` | `int` | Number of completed donations |
+| `$raised_amount_formatted` | `string` | HTML-formatted raised amount |
+| `$goal_amount_formatted` | `string` | HTML-formatted goal amount |
+
+#### Shortcode Equivalent
+
+```
+[giftflow_campaign_status_bar campaign_id="42"]
+```
+
+#### Developer Hook
+
+```php
+// Modify the data passed to the status bar template
+add_filter( 'giftflow_campaign_status_bar_data', function( $data, $post_id ) {
+    $data['custom_label'] = 'Help us reach the goal!';
+    return $data;
+}, 10, 2 );
+```
+
+---
+
+### 3. Campaign Single Content — `giftflow/campaign-single-content`
+
+Renders a **tabbed content panel** on the single campaign page. Has three built-in tabs:
+
+| Tab | Slug | Content |
+|---|---|---|
+| Campaign | `campaign` | The campaign's post content (`get_the_content()`) |
+| Donations | `donations` | Paginated list of completed donations |
+| Comments | `comments` | WordPress comments thread |
+
+#### Attributes
+
+None — this block reads the current post ID from context.
+
+#### Example Block Markup
+
+```html
+<!-- wp:giftflow/campaign-single-content /-->
+```
+
+#### Extending the Tabs
+
+All three tabs are fully filterable. You can rename labels, swap icons, add entirely new tabs, or remove existing ones.
+
+**Change a tab label or icon:**
+
+```php
+add_filter( 'giftflow_campaign_single_content_tab_campaign_label', function( $label ) {
+    return __( 'Our Story', 'my-plugin' );
+} );
+
+add_filter( 'giftflow_campaign_single_content_tab_donations_icon', function( $icon ) {
+    return '<svg ...>...</svg>'; // your custom SVG
+} );
+```
+
+Available label/icon filters:
+- `giftflow_campaign_single_content_tab_campaign_label`
+- `giftflow_campaign_single_content_tab_campaign_icon`
+- `giftflow_campaign_single_content_tab_donations_label`
+- `giftflow_campaign_single_content_tab_donations_icon`
+- `giftflow_campaign_single_content_tab_comments_label`
+- `giftflow_campaign_single_content_tab_comments_icon`
+
+**Add a custom tab:**
+
+```php
+add_filter( 'giftflow_campaign_single_content_tabs', function( $tabs, $post_id ) {
+    $tabs['updates'] = array(
+        'id'       => 'updates',
+        'label'    => __( 'Updates', 'my-plugin' ),
+        'icon'     => '<svg ...>...</svg>',
+        'callback' => function( $post_id ) {
+            echo '<p>Campaign updates go here.</p>';
+        },
+    );
+    return $tabs;
+}, 10, 2 );
+```
+
+**Inject content before/after existing tab panels:**
+
+```php
+// Before campaign post content
+add_action( 'giftflow_campaign_single_content_tab_campaign_before', function( $post_id ) {
+    echo '<div class="campaign-notice">🎉 This campaign is fully funded!</div>';
+} );
+
+// After the donations list
+add_action( 'giftflow_campaign_single_content_tab_donations_after', function( $post_id ) {
+    echo '<p>Thank you to all our donors.</p>';
+} );
+```
+
+All six content hooks:
+```
+giftflow_campaign_single_content_tab_campaign_before   ($post_id)
+giftflow_campaign_single_content_tab_campaign_after    ($post_id)
+giftflow_campaign_single_content_tab_donations_before  ($post_id)
+giftflow_campaign_single_content_tab_donations_after   ($post_id)
+giftflow_campaign_single_content_tab_comments_before   ($post_id)
+giftflow_campaign_single_content_tab_comments_after    ($post_id)
+```
+
+---
+
+### 4. Campaign Single Images — `giftflow/campaign-single-images`
+
+Renders the campaign's **featured image and gallery** with a lightbox (PhotoSwipe) and thumbnail navigation.
+
+#### Attributes
+
+None — reads the current post ID from context.
+
+#### Example Block Markup
+
+```html
+<!-- wp:giftflow/campaign-single-images /-->
+```
+
+#### Behaviour Notes
+
+- **Single image**: shows a full-width image with an expand button to open the lightbox.
+- **Multiple images**: shows a main image + thumbnail strip. By default, up to 3 thumbnails are visible; a `+N` expand button reveals the rest.
+- Images are sourced from: the campaign's featured image + the `_gallery` post meta field.
+- All images pass `data-pswp-src`, `data-pswp-width`, and `data-pswp-height` attributes for PhotoSwipe.
+- If no images exist, a placeholder element is rendered.
+
+#### Filtering the Image List
+
+```php
+// Add, remove, or reorder images before rendering
+add_filter( 'giftflow_campaign_single_images', function( $image_ids, $post_id ) {
+    // Add an extra promotional image (attachment ID)
+    $image_ids[] = 99;
+    return $image_ids;
+}, 10, 2 );
+```
+
+---
+
+### 5. Donor Account — `giftflow/donor-account`
+
+Renders the full donor self-service portal. Shows a **tabbed dashboard** for logged-in donors, or a **login form** for guests.
+
+#### Attributes
+
+None.
+
+#### Example Block Markup
+
+```html
+<!-- wp:giftflow/donor-account /-->
+```
+
+#### Built-in Tabs
+
+| Tab | Slug | Template |
+|---|---|---|
+| Dashboard | `dashboard` | `block/donor-account--dashboard.php` |
+| My Donations | `donations` | `block/donor-account--my-donations.php` |
+| My Account | `my-account` | `block/donor-account--my-account.php` |
+
+Tab URLs use pretty permalinks when enabled:
+- `/donor-account/` → Dashboard
+- `/donor-account/donations` → My Donations
+- `/donor-account/my-account` → My Account
+
+Use `giftflow_donor_account_page_url( 'donations' )` to generate tab links programmatically.
+
+#### Adding a Custom Tab
+
+```php
+add_filter( 'giftflow_donor_account_tabs', function( $tabs ) {
+    $tabs[] = array(
+        'label'    => __( 'My Certificates', 'my-plugin' ),
+        'slug'     => 'certificates',
+        'icon'     => giftflow_svg_icon( 'user' ), // or your own SVG string
+        'callback' => function() {
+            echo '<p>Your donation certificates will appear here.</p>';
+        },
+    );
+    return $tabs;
+} );
+```
+
+#### Account Form Hooks & Filters
+
+```php
+// Filter the account form data after sanitization
+add_filter( 'giftflow_sanitize_account_form_data', function( $form_data ) {
+    // Add or override fields before they are saved
+    return $form_data;
+} );
+
+// Filter which meta fields get written when account is saved
+add_filter( 'giftflow_donor_account_meta_fields', function( $fields, $user_id, $donor_id ) {
+    $fields[] = 'organization'; // save _organization post meta on the donor
+    return $fields;
+}, 10, 3 );
+
+// Fires after account information is successfully updated
+add_action( 'giftflow_after_update_donor_account', function( $user_id, $data, $donor_id ) {
+    // Sync to CRM, send notification, etc.
+}, 10, 3 );
+
+// Fires after password is successfully changed
+add_action( 'giftflow_after_update_user_password_success', function( $user_id, $new_password ) {
+    // e.g. invalidate sessions, notify security team
+}, 10, 2 );
+```
+
+---
+
+### 6. Share — `giftflow/share`
+
+Renders a row of social sharing buttons for the current page or a custom URL.
+
+#### Attributes
+
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `title` | `string` | `'Share this'` | Label shown above the buttons |
+| `customUrl` | `string` | `''` | Override the URL to share. If empty, uses the current page URL. |
+| `showSocials` | `boolean` | `true` | Show Facebook, X, and LinkedIn buttons |
+| `showEmail` | `boolean` | `true` | Show Email share button |
+| `showCopyUrl` | `boolean` | `true` | Show Copy Link button |
+
+#### Example Block Markup
+
+```html
+<!-- wp:giftflow/share {"title":"Share Campaign:","showEmail":false} /-->
+```
+
+#### Behaviour Notes
+
+- Social platforms included: **Facebook**, **X (Twitter)**, **LinkedIn**.
+- Email share opens a `mailto:` link pre-filled with subject and body.
+- Copy Link uses the JavaScript Clipboard API and shows a confirmation message.
+- All share buttons expose `data-network` and `data-url` attributes for custom JavaScript tracking.
+
+#### Tracking Social Shares (JavaScript example)
+
+```js
+document.querySelectorAll( '.giftflow-share__button' ).forEach( btn => {
+    btn.addEventListener( 'click', e => {
+        const network = btn.dataset.network;
+        const url     = btn.dataset.url;
+        console.log( `Shared on ${network}: ${url}` );
+        // gtag( 'event', 'share', { method: network, content_id: url } );
+    } );
+} );
+```
+
+---
+
+## Shortcodes
+
+All three shortcodes are registered in `GiftFlow\Frontend\Shortcodes` and available everywhere WordPress shortcodes work — posts, pages, widgets, and page builders.
+
+---
+
+### `[giftflow_donation_form]`
+
+Embeds the full multi-step donation form for a specific campaign. This is the same form that the Donation Button block opens as a modal.
+
+#### Parameters
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `campaign_id` | ✅ | — | The post ID of the campaign |
+
+#### Usage
+
+```
+[giftflow_donation_form campaign_id="42"]
+```
+
+#### PHP Usage
+
+```php
+echo do_shortcode( '[giftflow_donation_form campaign_id="42"]' );
+```
+
+#### What the Form Renders
+
+The shortcode loads `donation-form.php` and passes a rich set of variables:
+
+| Variable | Description |
+|---|---|
+| `$campaign_id` | The campaign post ID |
+| `$campaign_title` | Campaign title |
+| `$gateways` | Array of enabled gateway instances |
+| `$preset_donation_amounts` | Array of `['amount' => float]` |
+| `$allow_custom_donation_amounts` | Boolean |
+| `$raised_amount` | Float total raised |
+| `$goal_amount` | Raw goal string |
+| `$default_amount` | First preset amount or `10` |
+| `$currency_symbol` | e.g. `$` |
+| `$currency_format_template` | JS format string e.g. `${{value}}` |
+| `$donation_types` | Array of enabled donation type objects |
+| `$recurring_interval` | e.g. `monthly` |
+| `$user_fullname` / `$user_email` | Pre-filled for logged-in users |
+| `$user_info_readonly` | Boolean — locks name/email for logged-in users |
+| `$min_amount` / `$max_amount` | From global settings |
+| `$location` / `$gallery` | Campaign meta |
+
+#### Developer Filters
+
+```php
+// Modify all attributes passed to the donation form template
+add_filter( 'giftflow_form_donation_form_atts', function( $atts, $campaign_id ) {
+    $atts['min_amount'] = 5;
+    return $atts;
+}, 10, 2 );
+
+// Add or remove donation types shown on the form
+add_filter( 'giftflow_form_donation_types', function( $types, $campaign_id ) {
+    $types[] = array(
+        'name'        => 'in-kind',
+        'icon'        => '',
+        'label'       => __( 'In-Kind', 'my-plugin' ),
+        'description' => __( 'Non-monetary donation.', 'my-plugin' ),
+    );
+    return $types;
+}, 10, 2 );
+```
+
+---
+
+### `[giftflow_campaign_grid]`
+
+Renders a responsive grid of campaign cards with optional pagination, category filtering, and search.
+
+#### Parameters
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `per_page` | — | `10` | Number of campaigns per page |
+| `orderby` | — | `date` | Sort field (`date`, `title`, `modified`, etc.) |
+| `order` | — | `DESC` | Sort direction: `ASC` or `DESC` |
+| `category` | — | `''` | Filter by category term ID or slug |
+| `search` | — | `''` | Keyword search |
+| `paged` | — | `1` | Starting page number (automatically overridden by `?paged=` URL parameter) |
+| `custom_class` | — | `''` | Additional CSS class on the wrapper element |
+
+#### Usage Examples
+
+```
+[giftflow_campaign_grid]
+
+[giftflow_campaign_grid per_page="6" orderby="title" order="ASC"]
+
+[giftflow_campaign_grid category="3" per_page="3"]
+
+[giftflow_campaign_grid search="clean water" custom_class="my-grid"]
+```
+
+#### Pagination
+
+The shortcode automatically picks up the `?paged=N` URL query variable, so standard WordPress pagination links work out of the box. The grid template renders a `<nav class="gfw-pagination">` element when there are multiple pages.
+
+#### Each Campaign Card Includes
+
+- Featured image with link
+- Category badge(s) (up to 2)
+- Campaign title with link
+- Excerpt (default 20 words)
+- Campaign status bar (if goal > 0)
+- Location (if set)
+
+#### Developer Filters
+
+```php
+// Modify the WP_Query args before campaigns are fetched
+add_filter( 'giftflow_campaign_grid_query_args', function( $args, $atts ) {
+    // Show only featured campaigns
+    $args['meta_key']   = '_is_featured';
+    $args['meta_value'] = '1';
+    return $args;
+}, 10, 2 );
+
+// Modify all template data passed to campaign-grid.php
+add_filter( 'giftflow_form_campaign_grid_atts', function( $atts ) {
+    $atts['custom_class'] = 'my-forced-class';
+    return $atts;
+} );
+
+// Change the excerpt word count per card
+add_filter( 'giftflow_campaign_grid_excerpt_length', function( $length, $campaign_id ) {
+    return 30;
+}, 10, 2 );
+
+// Override the empty-state message
+add_filter( 'giftflow_campaign_grid_empty_message', function( $msg ) {
+    return __( 'No active campaigns right now. Check back soon!', 'my-plugin' );
+} );
+```
+
+---
+
+### `[giftflow_campaign_status_bar]`
+
+Embeds the campaign progress bar anywhere — inside regular posts, pages, or custom templates.
+
+#### Parameters
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `campaign_id` | ✅ | — | The post ID of the campaign |
+
+#### Usage
+
+```
+[giftflow_campaign_status_bar campaign_id="42"]
+```
+
+#### PHP Usage
+
+```php
+echo do_shortcode( '[giftflow_campaign_status_bar campaign_id="42"]' );
+```
+
+#### Notes
+
+- Renders the same `block/campaign-status-bar.php` template as the Gutenberg block.
+- Output includes raised amount, goal, percentage bar, days left, and donor count.
+- Useful inside donation receipt emails, campaign teasers, or widget areas.
+
+---
+
+## Block Templates
+
+GiftFlow registers several **block templates** — pre-built full-page layouts that appear as template choices in the WordPress Site Editor or Page template selector.
+
+| Template Slug | Title | Post Types |
+|---|---|---|
+| `giftflow//campaigns-page` | Campaigns Page | `page` |
+| `giftflow//archive-campaign` | Campaign Archive | (archive) |
+| `giftflow//taxonomy-campaign-tax` | Category Campaign Archive | (taxonomy) |
+| `giftflow//single-campaign` | Single Campaign | `campaign` |
+| `giftflow//donor-account` | Donor Account | `page` |
+| `giftflow//thank-donor` | Thank Donor | `page` |
+
+Template content is loaded from `.html` files in the plugin's `block-templates/` directory and is filterable:
+
+```php
+add_filter( 'giftflow_block_template_content', function( $content, $template ) {
+    if ( 'single-campaign' === $template['template'] ) {
+        // Prepend a custom announcement banner
+        $content = '<!-- wp:paragraph --><p>📢 Announcement</p><!-- /wp:paragraph -->' . $content;
+    }
+    return $content;
+}, 10, 2 );
+```
+
+---
+
+## Quick Reference
+
+### Blocks
+
+| Block | Slug | Key Attributes | Notes |
+|---|---|---|---|
+| Donation Button | `giftflow/donation-button` | `campaignId`, `buttonText`, `backgroundColor`, `textColor`, `borderRadius`, `fullWidth` | Auto-detects campaign from post context |
+| Campaign Status Bar | `giftflow/campaign-status-bar` | `__editorPostId` (editor only) | Filterable via `giftflow_campaign_status_bar_data` |
+| Campaign Single Content | `giftflow/campaign-single-content` | — | Tabs filterable via `giftflow_campaign_single_content_tabs` |
+| Campaign Single Images | `giftflow/campaign-single-images` | — | Image list filterable via `giftflow_campaign_single_images` |
+| Donor Account | `giftflow/donor-account` | — | Tabs filterable via `giftflow_donor_account_tabs` |
+| Share | `giftflow/share` | `title`, `customUrl`, `showSocials`, `showEmail`, `showCopyUrl` | Supports Facebook, X, LinkedIn, Email, Copy Link |
+
+### Shortcodes
+
+| Shortcode | Required Params | Optional Params |
+|---|---|---|
+| `[giftflow_donation_form]` | `campaign_id` | — |
+| `[giftflow_campaign_grid]` | — | `per_page`, `orderby`, `order`, `category`, `search`, `paged`, `custom_class` |
+| `[giftflow_campaign_status_bar]` | `campaign_id` | — |

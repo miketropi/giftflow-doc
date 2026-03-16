@@ -1,0 +1,163 @@
+---
+title: "Introduction GiftFlow"
+description: "An overview of GiftFlow — the comprehensive WordPress campaign and donation management plugin."
+sidebar_position: 1
+tags:
+  - "giftflow"
+  - "wordpress"
+  - "donations"
+  - "campaigns"
+---
+
+## What is GiftFlow?
+
+**GiftFlow** is a comprehensive WordPress plugin developed by [BePlus](https://beplusthemes.com/) for managing donations, donors, and fundraising campaigns. Built on modern WordPress standards with an extensible architecture, it provides everything an organization needs to collect donations, run campaigns, and track donor relationships — all from within the WordPress admin.
+
+> Plugin URI: [https://giftflow.beplus-agency.cloud/](https://giftflow.beplus-agency.cloud/)  
+> License: GPL v2 or later
+
+---
+
+## Core Capabilities
+
+### 🎯 Campaign Management
+
+GiftFlow is built around the concept of **campaigns** — the central entity that ties donations, donors, and goals together.
+
+- Create and manage unlimited fundraising campaigns
+- Set campaign goals and track real-time progress with visual indicators
+- Attach images and galleries to campaigns
+- Add location support via Google Maps integration
+- Monitor campaign analytics and performance metrics
+
+### 💳 Payment Processing
+
+GiftFlow supports multiple payment gateways out of the box:
+
+| Gateway | Integration Type | Key Features |
+|---|---|---|
+| **Stripe** | Direct SDK (PHP) | Credit/debit cards, PCI compliant, webhooks, Payment Intent API |
+| **PayPal** | PayPal JS SDK v6 | Orders API v2, Smart Buttons, on-site processing, access token caching |
+| **Direct Bank Transfer** | Manual | Bank transfer instructions, manual verification |
+
+All gateways support real-time webhook integration for payment status updates.
+
+### 👥 Donor Management
+
+- Full donor profiles with contact information
+- Complete donation history per donor
+- Tax information storage
+- Donor preferences and account dashboard
+- Anonymous donation support
+
+### 📋 Donation Tracking
+
+Donations are managed through a centralized `Donations` class with full lifecycle support:
+
+- Status tracking: `pending`, `completed`, `failed`, `refunded`
+- One-time and recurring donation support
+- Transaction details and metadata
+- Donation event history logging
+
+---
+
+## Gutenberg Blocks
+
+GiftFlow ships with **6 Gutenberg blocks** for building campaign pages without writing code:
+
+| Block | Slug | Purpose |
+|---|---|---|
+| Donation Button | `giftflow/donation-button` | Customizable CTA button with campaign linking |
+| Campaign Single Content | `giftflow/campaign-single-content` | Displays campaign content & details |
+| Campaign Single Images | `giftflow/campaign-single-images` | Image gallery with lightbox & thumbnails |
+| Campaign Status Bar | `giftflow/campaign-status-bar` | Visual goal/progress indicator |
+| Donor Account | `giftflow/donor-account` | Donor dashboard & donation history |
+| Share | `giftflow/share` | Social sharing (Facebook, X, LinkedIn, Email) |
+
+---
+
+## Shortcodes
+
+Embed a donation form anywhere with a simple shortcode:
+
+```php
+[giftflow_donation_form campaign_id="123"]
+```
+
+Or call it programmatically in PHP:
+
+```php
+echo do_shortcode('[giftflow_donation_form campaign_id="123"]');
+```
+
+---
+
+## Third-Party Integrations
+
+GiftFlow optionally integrates with external services when enabled by the site administrator:
+
+- **Stripe** — Secure card payment processing
+- **PayPal** — PayPal account and Smart Button payments
+- **Google reCAPTCHA** — Spam protection for donation forms
+- **Google Maps** — Campaign location display
+
+> ⚠️ Data may be transmitted to these external services when their features are active. Site administrators are responsible for GDPR compliance and should disclose usage in their privacy policy.
+
+---
+
+## Extensibility
+
+GiftFlow is designed to be extended via WordPress hooks:
+
+```php
+// React to a completed donation
+add_action('giftflow_payment_success', function($donation_id, $transaction_id) {
+    // your custom logic
+}, 10, 2);
+
+// Register a custom payment gateway
+add_filter('giftflow_payment_gateways', function($gateways) {
+    $gateways[] = new My_Custom_Gateway();
+    return $gateways;
+});
+```
+
+Key action hooks cover the full donation lifecycle (`created`, `updated`, `failed`), payment events (`success`, `failed`), and campaign events (`created`, `updated`). Filter hooks allow customization of donation data, form fields, and gateway registration.
+
+---
+
+## System Requirements
+
+| Requirement | Minimum Version |
+|---|---|
+| WordPress | 6.0+ |
+| PHP | 7.4+ |
+| MySQL | 5.6+ |
+| Node.js (dev builds) | v24 |
+| SSL Certificate | Required for payments |
+
+---
+
+## Tech Stack
+
+GiftFlow's frontend is built with modern JavaScript tooling:
+
+- **React 19** with `@wordpress/element`
+- **Zustand** for state management
+- **Chart.js** + `react-chartjs-2` for analytics
+- **PhotoSwipe** for image galleries
+- **Laravel Mix** (Webpack) for asset bundling
+- **Stripe.js** for secure card handling
+
+---
+
+## Quick Start
+
+1. Install and activate the plugin via **Plugins > Add New** (search "GiftFlow") or manually upload the folder to `/wp-content/plugins/`
+2. Go to **GiftFlow > Settings** to configure payment gateways
+3. Create your first campaign under **Campaigns > Add New**
+4. Use Gutenberg blocks or the `[giftflow_donation_form]` shortcode to add donation forms to your pages
+
+---
+
+*Developed by [BePlus](https://beplusthemes.com/) · GPL v2 or later*

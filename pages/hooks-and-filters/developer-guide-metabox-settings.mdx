@@ -1,0 +1,852 @@
+---
+title: "Hooks, Filters, Meta Boxes & Settings"
+description: "Complete developer reference for all action hooks, filter hooks, custom meta boxes, and settings API extension points in GiftFlow."
+sidebar_position: 3
+tags:
+  - "giftflow"
+  - "developer"
+  - "hooks"
+  - "filters"
+  - "metabox"
+  - "settings"
+---
+
+This guide covers every action hook, filter hook, meta box extension point, and settings API available in GiftFlow. All hook names, parameters, and code examples are sourced directly from the plugin source.
+
+---
+
+## Reading Settings
+
+GiftFlow stores its settings in four WordPress options. Use `giftflow_get_options()` to read individual values safely:
+
+```php
+// Signature: giftflow_get_options( $option, $group, $default )
+$currency     = giftflow_get_options( 'currency', 'giftflow_general_options', 'USD' );
+$min_amount   = giftflow_get_options( 'min_amount', 'giftflow_general_options', 1 );
+$from_name    = giftflow_get_options( 'email_from_name', 'giftflow_email_options', '' );
+```
+
+Or fetch the raw option array:
+
+```php
+$general  = get_option( 'giftflow_general_options' );
+$payment  = get_option( 'giftflow_payment_options' );
+$email    = get_option( 'giftflow_email_options' );
+$api_keys = get_option( 'giftflow_options_with_api_keys_options' );
+```
+
+**Option groups and their keys:**
+
+| Option Group | Keys |
+|---|---|
+| `giftflow_general_options` | `currency`, `currency_template`, `preset_donation_amounts`, `min_amount`, `max_amount`, `campaigns_page`, `donor_account_page`, `thank_donor_page`, `donation_privacy_policy_page`, `donation_terms_conditions_page` |
+| `giftflow_payment_options` | Gateway-specific keys (e.g. `stripe[stripe_enabled]`, `paypal[paypal_enabled]`) |
+| `giftflow_email_options` | `email_from_name`, `email_admin_address` |
+| `giftflow_options_with_api_keys_options` | `google_recaptcha[google_recaptcha_enabled]`, `google_recaptcha[google_recaptcha_site_key]`, `google_recaptcha[google_recaptcha_secret_key]`, `google_maps[google_maps_api_key]` |
+
+---
+
+## Extending the Settings Page
+
+### Add a Custom Settings Tab
+
+The settings page tab list is filterable. Each entry maps a tab key to a display label. Rendering is handled by `giftflow_settings_tabs` action hook.
+
+```php
+// Step 1 — add your tab to the nav
+add_filter( 'giftflow_settings_tabs', function( $tabs ) {
+    $tabs['my_extension'] = __( 'My Extension', 'my-plugin' );
+    return $tabs;
+} );
+
+// Step 2 — render your tab content when it is active
+add_action( 'giftflow_settings_tabs', function( $active_tab ) {
+    if ( 'my_extension' !== $active_tab ) {
+        return;
+    }
+
+    // Register and display your own settings section
+    settings_fields( 'my_extension_options' );
+    do_settings_sections( 'giftflow-my-extension' );
+} );
+
+// Step 3 — register your settings on admin_init
+add_action( 'admin_init', function() {
+    register_setting( 'my_extension_options', 'my_extension_options' );
+
+    add_settings_section(
+        'my_extension_section',
+        __( 'My Extension Settings', 'my-plugin' ),
+        '__return_false',
+        'giftflow-my-extension'
+    );
+
+    add_settings_field(
+        'my_custom_field',
+        __( 'Custom Field', 'my-plugin' ),
+        function() {
+            $opts = get_option( 'my_extension_options' );
+            $val  = $opts['my_custom_field'] ?? '';
+            echo '<input type="text" name="my_extension_options[my_custom_field]" value="' . esc_attr( $val ) . '">';
+        },
+        'giftflow-my-extension',
+        'my_extension_section'
+    );
+} );
+```
+
+### Add Fields to the General Settings Tab
+
+Use `giftflow_general_settings` to inject fields into the existing settings structure before it is registered:
+
+```php
+add_filter( 'giftflow_general_settings', function( $settings ) {
+    $settings['general']['fields']['my_option'] = array(
+        'id'          => 'giftflow_my_option',
+        'name'        => 'giftflow_general_options[my_option]',
+        'type'        => 'text',
+        'label'       => __( 'My Option', 'my-plugin' ),
+        'value'       => giftflow_get_options( 'my_option', 'giftflow_general_options', '' ),
+        'description' => __( 'Description of my option.', 'my-plugin' ),
+    );
+    return $settings;
+} );
+```
+
+### Add Fields to the API Keys Tab
+
+```php
+add_filter( 'giftflow_options_with_api_keys_settings_fields', function( $fields, $current_options ) {
+    $fields['my_service'] = array(
+        'id'    => 'giftflow_my_service',
+        'name'  => 'giftflow_options_with_api_keys_options[my_service]',
+        'type'  => 'accordion',
+        'label' => __( 'My Service', 'my-plugin' ),
+        'accordion_settings' => array(
+            'label'  => __( 'My Service Settings', 'my-plugin' ),
+            'is_open' => false,
+            'fields' => array(
+                'my_api_key' => array(
+                    'id'    => 'giftflow_my_api_key',
+                    'type'  => 'text',
+                    'label' => __( 'API Key', 'my-plugin' ),
+                    'value' => $current_options['my_service']['my_api_key'] ?? '',
+                ),
+            ),
+        ),
+    );
+    return $fields;
+}, 10, 2 );
+```
+
+---
+
+## Custom Meta Boxes
+
+### Using the `Base_Meta_Box` Class
+
+GiftFlow provides an abstract base class `GiftFlow\Admin\MetaBoxes\Base_Meta_Box` that simplifies meta box creation. Extend it to add a meta box to any of the plugin's custom post types (`donation`, `donor`, `campaign`) or your own.
+
+```php
+// In your plugin file (loaded after GiftFlow)
+add_action( 'plugins_loaded', function() {
+
+    class My_Campaign_Extra_Meta extends \GiftFlow\Admin\MetaBoxes\Base_Meta_Box {
+
+        public function __construct() {
+            $this->id        = 'my_campaign_extra';
+            $this->title     = __( 'Extra Campaign Info', 'my-plugin' );
+            $this->post_type = 'campaign';
+            $this->context   = 'side';    // 'normal', 'side', or 'advanced'
+            $this->priority  = 'default'; // 'high', 'default', 'low'
+            parent::__construct();
+        }
+
+        protected function get_fields() {
+            return array(
+                'partner_name' => array(
+                    'label'       => __( 'Partner Name', 'my-plugin' ),
+                    'type'        => 'textfield',
+                    'description' => __( 'Enter the partner organization name.', 'my-plugin' ),
+                ),
+                'impact_level' => array(
+                    'label'   => __( 'Impact Level', 'my-plugin' ),
+                    'type'    => 'select',
+                    'options' => array(
+                        'low'    => __( 'Low', 'my-plugin' ),
+                        'medium' => __( 'Medium', 'my-plugin' ),
+                        'high'   => __( 'High', 'my-plugin' ),
+                    ),
+                ),
+            );
+        }
+
+        public function render_meta_box( $post ) {
+            wp_nonce_field( 'my_campaign_extra', 'my_campaign_extra_nonce' );
+
+            foreach ( $this->get_fields() as $field_id => $field_args ) {
+                $value          = get_post_meta( $post->ID, '_' . $field_id, true );
+                $field_instance = new \GiftFlow_Field(
+                    $field_id,
+                    $field_id,
+                    $field_args['type'],
+                    array_merge( $field_args, array( 'value' => $value ) )
+                );
+                $field_instance->render();
+            }
+        }
+
+        public function save_meta_box( $post_id ) {
+            if ( ! $this->verify_nonce( 'my_campaign_extra_nonce', 'my_campaign_extra' ) ) {
+                return;
+            }
+            if ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) {
+                return;
+            }
+            if ( ! current_user_can( 'edit_post', $post_id ) ) {
+                return;
+            }
+
+            foreach ( $this->get_fields() as $field_id => $field ) {
+                if ( isset( $_POST[ $field_id ] ) ) {
+                    update_post_meta(
+                        $post_id,
+                        '_' . $field_id,
+                        sanitize_text_field( wp_unslash( $_POST[ $field_id ] ) )
+                    );
+                }
+            }
+        }
+    }
+
+    new My_Campaign_Extra_Meta();
+} );
+```
+
+### Available Field Types for `GiftFlow_Field`
+
+`GiftFlow_Field` is the shared field renderer used by all GiftFlow meta boxes and settings. Pass any of these as the `type` argument:
+
+| Type | Description |
+|---|---|
+| `textfield` | Single-line text input |
+| `textarea` | Multi-line text area |
+| `email` | Email input |
+| `tel` | Phone number input |
+| `number` | Numeric input (supports `min`, `step`) |
+| `currency` | Currency amount input |
+| `select` | Dropdown; requires `options` array |
+| `switch` | On/off toggle |
+| `datetime` | Date/time picker |
+| `repeater` | Repeatable group of sub-fields (`repeater_settings`) |
+| `gallery` | WordPress media gallery picker (`gallery_settings`) |
+| `accordion` | Collapsible section with nested fields (`accordion_settings`) |
+| `html` | Raw HTML output (read-only display) |
+
+### Built-in Meta Box Field Reference
+
+**Campaign post type** (`campaign_details` meta box):
+
+| Field ID | Meta Key | Type | Notes |
+|---|---|---|---|
+| `goal_amount` | `_goal_amount` | currency | Fundraising goal |
+| `start_date` | `_start_date` | datetime | Campaign start |
+| `end_date` | `_end_date` | datetime | Campaign end (empty = indefinite) |
+| `status` | `_status` | select | `active`, `completed`, `closed`, `pending` |
+| `one_time` | `_one_time` | switch | Enable one-time donations |
+| `recurring` | `_recurring` | switch | Enable recurring (Pro) |
+| `recurring_interval` | `_recurring_interval` | select | `daily`, `weekly`, `monthly`, `quarterly`, `yearly` |
+| `preset_donation_amounts` | `_preset_donation_amounts` | repeater | Serialized array |
+| `allow_custom_donation_amounts` | `_allow_custom_donation_amounts` | switch | |
+| `location` | `_location` | textfield | |
+| `gallery` | `_gallery` | gallery | Serialized image IDs |
+
+**Donation post type** (`donation_transaction_details` meta box):
+
+| Field ID | Meta Key | Type |
+|---|---|---|
+| `amount` | `_amount` | currency |
+| `payment_method` | `_payment_method` | select |
+| `status` | `_status` | select |
+| `donor_id` | `_donor_id` | select |
+| `donor_message` | `_donor_message` | textarea |
+| `anonymous_donation` | `_anonymous_donation` | select (`yes`/`no`) |
+| `campaign_id` | `_campaign_id` | select |
+| `donation_type` | `_donation_type` | select |
+| `transaction_id` | `_transaction_id` | textfield |
+| `transaction_raw_data` | `_transaction_raw_data` | textarea |
+
+**Donor post type** (`donor_contact_details` meta box):
+
+| Field ID | Meta Key | Type |
+|---|---|---|
+| `first_name` | `_first_name` | textfield |
+| `last_name` | `_last_name` | textfield |
+| `email` | `_email` | email |
+| `phone` | `_phone` | tel |
+| `address` | `_address` | textarea |
+| `city` | `_city` | textfield |
+| `state` | `_state` | textfield |
+| `postal_code` | `_postal_code` | textfield |
+| `country` | `_country` | textfield |
+
+---
+
+## Action Hooks Reference
+
+### Donation Lifecycle
+
+```php
+// Fires before a donation post is created (via Donations::create())
+do_action( 'giftflow_donation_before_create', $data );
+
+// Fires after a donation post is successfully created
+do_action( 'giftflow_donation_created', $donation_id, $data );
+
+// Fires when donation creation fails
+do_action( 'giftflow_donation_create_failed', $wp_error, $data );
+
+// Fires before a donation is updated
+do_action( 'giftflow_donation_before_update', $donation_id, $data );
+
+// Fires after a donation is updated
+do_action( 'giftflow_donation_updated', $donation_id, $data );
+
+// Fires when a donation update fails
+do_action( 'giftflow_donation_update_failed', $wp_error, $donation_id, $data );
+
+// Fires before a donation is deleted
+do_action( 'giftflow_donation_before_delete', $donation_id, $force_delete );
+
+// Fires after a donation is deleted
+do_action( 'giftflow_donation_deleted', $donation_id, $donation_data, $force_delete );
+
+// Fires after donation meta fields are saved
+do_action( 'giftflow_donation_meta_saved', $donation_id, $data );
+```
+
+**Example — send a Slack notification on new donation:**
+
+```php
+add_action( 'giftflow_donation_created', function( $donation_id, $data ) {
+    $amount = floatval( $data['donation_amount'] ?? 0 );
+    $name   = sanitize_text_field( $data['donor_name'] ?? 'Anonymous' );
+    // my_slack_notify( "New donation: $name - $$amount" );
+}, 10, 2 );
+```
+
+### Donation Status
+
+```php
+// Fires before status changes
+do_action( 'giftflow_donation_before_status_update', $donation_id, $new_status, $old_status );
+
+// Fires after status changes
+do_action( 'giftflow_donation_status_updated', $donation_id, $new_status, $old_status );
+
+// Dynamic hook — fires for each specific status transition
+// e.g. giftflow_donation_status_completed, giftflow_donation_status_refunded
+do_action( "giftflow_donation_status_{$status}", $donation_id, $old_status );
+```
+
+**Example — trigger a receipt when a donation completes:**
+
+```php
+add_action( 'giftflow_donation_status_completed', function( $donation_id, $old_status ) {
+    // send_receipt_email( $donation_id );
+}, 10, 2 );
+```
+
+### Payment Processing
+
+```php
+// Fires after payment is fully processed (success or failure result passed)
+do_action( 'giftflow_donation_after_payment_processed', $donation_id, $payment_result );
+
+// Fires after a new user account is created on first donation
+do_action( 'giftflow_new_user_on_first_time_donation', $user_id, $payment_result );
+```
+
+### Donor Events
+
+```php
+// Fires after a new donor record is created
+do_action( 'giftflow_donor_added', $donor_id, $data );
+```
+
+### Campaign Events
+
+```php
+do_action( 'giftflow_campaign_created', $campaign_id );
+do_action( 'giftflow_campaign_updated', $campaign_id );
+```
+
+### Donation Post-Level Hooks
+
+```php
+// Fires when a donation post is inserted for the first time
+do_action( 'giftflow_donation_post_inserted', $post_id, $post );
+
+// Fires when a donation post is updated
+do_action( 'giftflow_donation_post_updated', $post_id, $post_after, $post_before );
+
+// Fires before a donation post is permanently deleted
+do_action( 'giftflow_donation_post_before_delete', $post_id, $post );
+
+// Fires when a donation post is trashed
+do_action( 'giftflow_donation_post_trashed', $post_id, $post );
+
+// Fires when a donation post is restored from trash
+do_action( 'giftflow_donation_post_untrashed', $post_id, $post );
+```
+
+### Donation Meta Hooks
+
+```php
+do_action( 'giftflow_donation_meta_updated', $meta_id, $post_id, $meta_key, $meta_value );
+do_action( 'giftflow_donation_meta_added',   $meta_id, $post_id, $meta_key, $meta_value );
+do_action( 'giftflow_donation_meta_deleted', $meta_ids, $post_id, $meta_key, $meta_value );
+```
+
+### Gateway Events
+
+```php
+// Fires after a gateway is registered in the registry
+do_action( 'giftflow_gateway_registered', $gateway_id, $gateway_instance );
+
+// Fires during gateway hook initialization (use to attach hooks to a gateway)
+do_action( 'giftflow_gateway_init_hooks', $gateway_instance );
+
+// Fires when all gateways have been registered and sorted
+do_action( 'giftflow_gateways_initialized', $gateway_registry );
+
+// Fires to allow plugins to register additional gateways
+do_action( 'giftflow_register_gateways' );
+
+// Asset enqueue hooks per gateway
+do_action( 'giftflow_gateway_enqueue_frontend_assets', $gateway_id );
+do_action( 'giftflow_gateway_enqueue_admin_assets', $gateway_id );
+```
+
+### Email Hooks
+
+```php
+// Both of these fire on giftflow_donation_after_payment_processed
+// Admin notification (priority 10):
+add_action( 'giftflow_donation_after_payment_processed', 'giftflow_send_mail_notification_donation_to_admin', 10, 2 );
+
+// Donor thank-you (priority 12, only when $payment_result === true):
+add_action( 'giftflow_donation_after_payment_processed', 'giftflow_send_mail_thank_you_to_donor_payment_successful', 12, 2 );
+```
+
+### Form Hooks
+
+```php
+do_action( 'giftflow_donation_form_before_form', $args );
+do_action( 'giftflow_donation_form_before_donor_information' );
+do_action( 'giftflow_donation_form_after_donor_information' );
+do_action( 'giftflow_donation_form_after_payment_method', $args );
+do_action( 'giftflow_donation_form_after_form', $args );
+
+// AJAX / validation hooks
+do_action( 'giftflow_donation_form_before_process_donation', $fields ); // validate before processing
+```
+
+### Miscellaneous Admin Hooks
+
+```php
+// Cron: daily log cleanup
+do_action( 'giftflow_cleanup_logs' );
+
+// Test email dispatch
+do_action( 'giftflow_test_send_mail', $name ); // $name: 'admin_new_donation' | 'donor_thanks' | 'new_user_first_time_donation'
+```
+
+---
+
+## Filter Hooks Reference
+
+### Donation Data Filters
+
+```php
+// Filter donation data before creation
+add_filter( 'giftflow_donation_before_create', function( $data ) {
+    // modify $data before wp_insert_post
+    return $data;
+} );
+
+// Filter the WP post data used when creating a donation
+add_filter( 'giftflow_donation_post_data', function( $post_data, $data ) {
+    return $post_data;
+}, 10, 2 );
+
+// Filter donation data before update
+add_filter( 'giftflow_donation_before_update', function( $data, $donation_id ) {
+    return $data;
+}, 10, 2 );
+
+// Filter the WP post data used when updating a donation
+add_filter( 'giftflow_donation_update_post_data', function( $post_data, $data, $donation_id ) {
+    return $post_data;
+}, 10, 3 );
+
+// Filter the resolved donation data object returned by Donations::get()
+add_filter( 'giftflow_donation_data', function( $donation_data, $donation_id ) {
+    return $donation_data;
+}, 10, 2 );
+
+// Add custom validation (return WP_Error to block creation)
+add_filter( 'giftflow_donation_validate', function( $valid, $data ) {
+    if ( empty( $data['my_required_field'] ) ) {
+        return new WP_Error( 'missing_field', 'My required field is missing.' );
+    }
+    return $valid;
+}, 10, 2 );
+
+// Filter the query args for Donations::get_donations()
+add_filter( 'giftflow_donations_query_args', function( $args ) {
+    return $args;
+} );
+
+// Filter the returned donations collection
+add_filter( 'giftflow_donations_data', function( $donations, $args ) {
+    return $donations;
+}, 10, 2 );
+
+// Add/remove valid donation statuses
+add_filter( 'giftflow_donation_valid_statuses', function( $statuses ) {
+    $statuses[] = 'on_hold';
+    return $statuses;
+} );
+```
+
+### Donation Type & Recurrence Filters
+
+```php
+// Add recurring donation type options to the admin meta box
+add_filter( 'giftflow_donation_type_options', function( $options ) {
+    $options['recurring'] = __( 'Recurring', 'my-plugin' );
+    return $options;
+} );
+
+// Add recurring interval options
+add_filter( 'giftflow_recurring_interval_options', function( $options ) {
+    $options['monthly'] = __( 'Monthly', 'my-plugin' );
+    return $options;
+} );
+```
+
+### Form Filters
+
+```php
+// Modify the attributes/data passed to donation-form.php
+add_filter( 'giftflow_form_donation_form_atts', function( $atts, $campaign_id ) {
+    $atts['min_amount'] = 10;
+    return $atts;
+}, 10, 2 );
+
+// Add or remove donation types shown on the form
+add_filter( 'giftflow_form_donation_types', function( $donation_types, $campaign_id ) {
+    // Add a custom type
+    $donation_types[] = array(
+        'name'        => 'in-kind',
+        'icon'        => '',
+        'label'       => __( 'In-Kind', 'my-plugin' ),
+        'description' => __( 'Non-monetary donation.', 'my-plugin' ),
+    );
+    return $donation_types;
+}, 10, 2 );
+
+// Change the step increment on the donation amount input
+add_filter( 'giftflow_donation_form_amount_step', function( $step ) {
+    return 0.01; // Allow cent-level precision
+} );
+```
+
+### Campaign Filters
+
+```php
+// Filter query args for the campaign grid shortcode
+add_filter( 'giftflow_campaign_grid_query_args', function( $args, $atts ) {
+    return $args;
+}, 10, 2 );
+
+// Modify campaign status bar template data
+add_filter( 'giftflow_campaign_status_bar_data', function( $data, $post_id ) {
+    return $data;
+}, 10, 2 );
+
+// Modify days left calculation
+add_filter( 'giftflow_get_campaign_days_left', function( $days_left, $campaign_id ) {
+    return $days_left;
+}, 10, 2 );
+
+// Override empty state message in campaign grid
+add_filter( 'giftflow_campaign_grid_empty_message', function( $msg ) {
+    return __( 'No campaigns are currently running.', 'my-plugin' );
+} );
+
+// Modify the campaign grid wrapper CSS class
+add_filter( 'giftflow_campaign_grid_wrapper_class', function( $class ) {
+    return $class . ' my-custom-class';
+} );
+
+// Filter campaign grid excerpt length
+add_filter( 'giftflow_campaign_grid_excerpt_length', function( $length, $campaign_id ) {
+    return 25;
+}, 10, 2 );
+
+// Filter the block content on a single campaign page
+add_filter( 'giftflow_campaign_single_block_content', function( $block_content ) {
+    return $block_content;
+} );
+```
+
+### Payment Gateway Filters
+
+```php
+// Register a new payment gateway
+add_filter( 'giftflow_payment_gateways', function( $gateways ) {
+    $gateways[] = new My_Custom_Gateway();
+    return $gateways;
+} );
+
+// Add settings fields to the Payment tab for a gateway
+add_filter( 'giftflow_payment_methods_settings', function( $fields ) {
+    // $fields is an array of GiftFlow_Field definitions
+    return $fields;
+} );
+
+// Customize the payment methods label map (gateway id => label)
+add_filter( 'giftflow_payment_methods_options', function( $options ) {
+    return $options;
+} );
+
+// Add/modify the CSS class applied to a payment method item in the form
+add_filter( 'giftflow_donation_form_payment_method_supports_class', function( $class, $supports, $gateway ) {
+    return $class;
+}, 10, 3 );
+```
+
+### Email Filters
+
+```php
+// Modify the data passed to the admin new-donation email template
+add_filter( 'giftflow_new_donation_admin_email_args', function( $args, $donation_id, $donation_data ) {
+    $args['my_custom_field'] = get_post_meta( $donation_id, '_my_custom_field', true );
+    return $args;
+}, 10, 3 );
+
+// Modify the admin notification email subject
+add_filter( 'giftflow_new_donation_admin_email_subject', function( $subject, $donation_id, $donation_data ) {
+    return '[URGENT] ' . $subject;
+}, 10, 3 );
+
+// Modify the admin notification email header
+add_filter( 'giftflow_new_donation_admin_email_header', function( $header, $donation_id, $donation_data ) {
+    return $header;
+}, 10, 3 );
+
+// Modify the data passed to the donor thank-you email template
+add_filter( 'giftflow_thanks_donor_email_args', function( $args, $donation_id, $donation_data ) {
+    return $args;
+}, 10, 3 );
+
+// Modify the donor thank-you email subject
+add_filter( 'giftflow_thanks_donor_email_subject', function( $subject, $donation_id, $donation_data ) {
+    return $subject;
+}, 10, 3 );
+
+// Modify the donor thank-you email header text
+add_filter( 'giftflow_thanks_donor_email_header', function( $header, $donation_id, $donation_data ) {
+    return $header;
+}, 10, 3 );
+
+// Modify new-user email data (sent on first-time donation)
+add_filter( 'giftflow_new_user_email_data', function( $data, $donor_data, $user_id, $donor_id ) {
+    return $data;
+}, 10, 4 );
+
+// Add custom test email buttons to the Email settings tab
+add_filter( 'giftflow_test_email_notification_buttons', function( $buttons ) {
+    $buttons[] = array(
+        'id'    => 'my_custom_notification',
+        'label' => __( 'Send: My Custom Notification', 'my-plugin' ),
+    );
+    return $buttons;
+} );
+
+// Handle the test email dispatch for your custom button
+add_action( 'giftflow_test_send_mail', function( $name ) {
+    if ( 'my_custom_notification' !== $name ) return;
+    // send your test email here
+} );
+```
+
+### Currency Filters
+
+```php
+// Add or modify the available currencies
+add_filter( 'giftflow_common_currencies', function( $currencies ) {
+    $currencies[] = array(
+        'code'      => 'XYZ',
+        'symbol'    => '₮',
+        'name'      => 'My Currency',
+        'countries' => array( 'My Country' ),
+    );
+    return $currencies;
+} );
+
+// Modify the formatted amount HTML output
+add_filter( 'giftflow_render_currency_formatted_amount', function( $html, $currency, $decimals ) {
+    return $html;
+}, 10, 3 );
+```
+
+### Donation Status Options Filter
+
+```php
+// Add a custom status to the admin status dropdown
+add_filter( 'giftflow_donation_status_options', function( $options ) {
+    $options['on_hold'] = __( 'On Hold', 'my-plugin' );
+    return $options;
+} );
+```
+
+---
+
+## Registering a Custom Payment Gateway
+
+Extend `GiftFlow\Gateways\Gateway_Base` to create a fully integrated payment gateway. The base class handles registration, settings initialization, and asset enqueueing automatically.
+
+```php
+class My_Custom_Gateway extends \GiftFlow\Gateways\Gateway_Base {
+
+    protected function init_gateway() {
+        $this->id          = 'my_gateway';
+        $this->title       = __( 'My Gateway', 'my-plugin' );
+        $this->description = __( 'Pay via My Gateway.', 'my-plugin' );
+        $this->order       = 20; // Display order in the form
+        $this->supports    = array( 'one-time' ); // or add 'recurring'
+    }
+
+    protected function register_settings_fields() {
+        // These fields appear in Settings > Payment tab
+        add_filter( 'giftflow_payment_methods_settings', function( $fields ) {
+            $settings = get_option( 'giftflow_payment_options' );
+            $opts     = $settings[ $this->id ] ?? array();
+
+            $field = new \GiftFlow_Field(
+                'my_gateway',
+                'giftflow_payment_options[my_gateway]',
+                'accordion',
+                array(
+                    'label'              => $this->title,
+                    'accordion_settings' => array(
+                        'label'   => __( 'My Gateway Settings', 'my-plugin' ),
+                        'is_open' => true,
+                        'fields'  => array(
+                            'my_gateway_enabled' => array(
+                                'id'    => 'my_gateway_enabled',
+                                'type'  => 'switch',
+                                'label' => __( 'Enable My Gateway', 'my-plugin' ),
+                                'value' => $opts['my_gateway_enabled'] ?? '0',
+                            ),
+                            'my_gateway_api_key' => array(
+                                'id'    => 'my_gateway_api_key',
+                                'type'  => 'text',
+                                'label' => __( 'API Key', 'my-plugin' ),
+                                'value' => $opts['my_gateway_api_key'] ?? '',
+                            ),
+                        ),
+                    ),
+                )
+            );
+
+            $fields['my_gateway'] = array(
+                'id'    => 'my_gateway',
+                'label' => $this->title,
+                // pass instance to add_settings_field callback
+                '__field_instance' => $field,
+            );
+
+            return $fields;
+        }, 12 );
+    }
+
+    public function template_html() {
+        // Renders inside the payment method selection step
+        echo '<div class="my-gateway-form">';
+        echo '<p>' . esc_html__( 'You will be redirected to My Gateway to complete the payment.', 'my-plugin' ) . '</p>';
+        echo '</div>';
+    }
+
+    public function process_payment( $data, $donation_id = 0 ) {
+        // $data contains the posted form fields
+        // Return true on success or WP_Error on failure
+        $api_key = $this->get_setting( 'my_gateway_api_key' );
+
+        // ... call your payment API ...
+
+        return true;
+    }
+}
+
+// Instantiate on plugins_loaded, after GiftFlow is loaded
+add_action( 'plugins_loaded', function() {
+    new My_Custom_Gateway();
+}, 20 );
+```
+
+---
+
+## Quick Reference: All Filter Hooks
+
+| Filter | Source | Description |
+|---|---|---|
+| `giftflow_donation_before_create` | `class-donations.php` | Modify donation data before creation |
+| `giftflow_donation_post_data` | `class-donations.php` | Modify WP post args before `wp_insert_post` |
+| `giftflow_donation_before_update` | `class-donations.php` | Modify donation data before update |
+| `giftflow_donation_update_post_data` | `class-donations.php` | Modify WP post args before `wp_update_post` |
+| `giftflow_donation_data` | `class-donations.php` | Filter resolved donation data object |
+| `giftflow_donation_validate` | `class-donations.php` | Add custom validation (return WP_Error to block) |
+| `giftflow_donations_query_args` | `class-donations.php` | Filter WP_Query args for bulk donation queries |
+| `giftflow_donations_data` | `class-donations.php` | Filter the returned donations collection |
+| `giftflow_donation_valid_statuses` | `class-donations.php` | Add custom donation statuses |
+| `giftflow_donation_type_options` | `class-donation-transaction-meta.php` | Add options to donation type dropdown |
+| `giftflow_recurring_interval_options` | `class-donation-transaction-meta.php` | Add recurring interval options |
+| `giftflow_form_donation_form_atts` | `class-shortcodes.php` | Modify donation form data |
+| `giftflow_form_donation_types` | `class-shortcodes.php` | Add/remove donation type options in form |
+| `giftflow_form_campaign_grid_atts` | `class-shortcodes.php` | Modify campaign grid shortcode data |
+| `giftflow_donation_form_amount_step` | `donation-form.php` | Change amount input step increment |
+| `giftflow_campaign_grid_query_args` | `class-shortcodes.php` | Filter campaign grid WP_Query args |
+| `giftflow_campaign_status_bar_data` | `common.php` | Filter campaign status bar template data |
+| `giftflow_get_campaign_days_left` | `common.php` | Filter days left calculation |
+| `giftflow_campaign_grid_empty_message` | `campaign-grid.php` | Change empty-state message |
+| `giftflow_campaign_grid_wrapper_class` | `campaign-grid.php` | Modify grid wrapper CSS class |
+| `giftflow_campaign_grid_excerpt_length` | `campaign-grid.php` | Change excerpt word count |
+| `giftflow_campaign_grid_pagination_args` | `campaign-grid.php` | Filter pagination args |
+| `giftflow_campaign_single_block_content` | `single-campaign.php` | Replace/modify campaign page block markup |
+| `giftflow_campaign_taxonomy_archive_block_content` | `taxonomy-campaign-archive.php` | Modify archive block markup |
+| `giftflow_donor_account_block_content` | `donor-account.php` | Modify donor account block markup |
+| `giftflow_payment_gateways` | `class-gateway-base.php` | Register or remove payment gateways |
+| `giftflow_payment_methods_settings` | `class-gateway-base.php` | Add payment gateway settings fields |
+| `giftflow_payment_methods_options` | `common.php` | Modify payment method label map |
+| `giftflow_donation_form_payment_method_supports_class` | `donation-form.php` | Add CSS class to payment method items |
+| `giftflow_general_settings` | `settings.php` | Modify entire settings structure |
+| `giftflow_settings_tabs` | `settings.php` | Add/remove settings tabs |
+| `giftflow_options_with_api_keys_settings_fields` | `settings.php` | Add fields to the API keys settings tab |
+| `giftflow_new_donation_admin_email_args` | `mail.php` | Modify admin notification email data |
+| `giftflow_new_donation_admin_email_subject` | `mail.php` | Modify admin email subject |
+| `giftflow_new_donation_admin_email_header` | `mail.php` | Modify admin email header text |
+| `giftflow_thanks_donor_email_args` | `mail.php` | Modify donor thank-you email data |
+| `giftflow_thanks_donor_email_subject` | `mail.php` | Modify donor email subject |
+| `giftflow_thanks_donor_email_header` | `mail.php` | Modify donor email header |
+| `giftflow_new_user_email_data` | `common.php` | Modify new-user welcome email data |
+| `giftflow_test_email_notification_buttons` | `settings.php` | Add test email buttons |
+| `giftflow_common_currencies` | `common.php` | Add or modify available currencies |
+| `giftflow_render_currency_formatted_amount` | `common.php` | Modify formatted currency HTML |
+| `giftflow_donation_status_options` | `common.php` | Add custom status options |
+| `giftflow_campaign_donations_per_page` | `common.php` | Change donations per page on campaign view |
+| `giftflow_allowed_svg_tags` | `common.php` | Extend allowed SVG attributes in `wp_kses` |
+| `giftflow_campaigns_page_content_on_create` | `class-loader.php` | Modify default campaigns page block content on install |

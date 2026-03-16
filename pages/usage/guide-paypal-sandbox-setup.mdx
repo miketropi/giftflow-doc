@@ -1,0 +1,290 @@
+---
+title: "Configure PayPal (Sandbox / Test Mode)"
+description: "Step-by-step guide for connecting GiftFlow to PayPal in sandbox mode so you can test payments before going live."
+sidebar_position: 11
+tags:
+  - "paypal"
+  - "payment"
+  - "sandbox"
+  - "setup"
+  - "getting-started"
+---
+
+import { Callout } from 'nextra/components'
+
+This guide walks you through connecting GiftFlow to PayPal in **Sandbox (Test) Mode**. Sandbox mode lets you click through the full PayPal payment flow — logging in with a test buyer account, approving orders, and seeing donations appear in WordPress — without moving any real money.
+
+Complete this setup before you go live. When you are ready to accept real donations, you only need to swap the sandbox credentials for your live credentials and switch the mode to **Live**.
+
+---
+
+## What You Will Need
+
+- A free [PayPal Developer account](https://developer.paypal.com)
+- Administrator access to your WordPress site
+- About 15 minutes
+
+---
+
+## How PayPal Sandbox Works
+
+PayPal's sandbox is a completely separate environment at **sandbox.paypal.com**. It comes with automatically generated test accounts — a **Business (merchant)** account and a **Personal (buyer)** account — that you use to simulate payments without any real money involved.
+
+The flow on the donation form works like this:
+
+1. The donor fills in their name, email, and donation amount
+2. They click the **PayPal** button — a PayPal popup appears
+3. They log in using the sandbox **buyer** account (provided by PayPal)
+4. They approve the payment in the popup
+5. PayPal captures the order and records the donation in GiftFlow
+
+---
+
+## Step 1 — Create a PayPal Developer Account
+
+If you do not have a PayPal Developer account yet:
+
+1. Go to **[https://developer.paypal.com](https://developer.paypal.com)**
+2. Click **Log in to Dashboard** and sign in with your existing PayPal account, or create a new one
+3. Once logged in you will land on the **Developer Dashboard**
+
+---
+
+## Step 2 — Create a Sandbox App and Get Your Keys
+
+PayPal requires you to create an **App** in the Developer Dashboard to get your Client ID and Client Secret.
+
+1. In the Developer Dashboard, click **Apps & Credentials** in the top navigation (or the left sidebar).
+
+2. Make sure the toggle at the top is set to **Sandbox** (not Live).
+
+3. Click **Create App**.
+
+4. Give your app a name — for example `GiftFlow Test` — and click **Create App**.
+
+5. You will now see your app's detail page. It shows two credentials:
+
+   | Credential | What it is |
+   |---|---|
+   | **Client ID** | A long string starting with `AY…` or similar. This is safe to expose publicly. |
+   | **Client Secret** | Hidden by default — click **Show** to reveal it. Keep this private. |
+
+6. Copy both the **Client ID** and the **Client Secret** — you will paste them into GiftFlow next.
+
+<Callout type="warning"> 
+Keep your Client Secret private. Never share it publicly, commit it to version control, or put it anywhere other than your WordPress settings page.
+</Callout>
+
+---
+
+## Step 3 — Enter the Credentials in GiftFlow
+
+1. Log in to your **WordPress Admin**.
+
+2. In the left sidebar, go to **GiftFlow → Settings**.
+
+3. Click the **Payment** tab.
+
+4. Scroll down to find the **PayPal** section and click on it to expand it.
+
+5. Fill in the fields:
+
+   **Enable PayPal** — turn this toggle **on**.
+
+   **PayPal Mode** — select **Sandbox (Test Mode)** from the dropdown.
+
+   **PayPal Sandbox Client ID** — paste the Client ID you copied from the PayPal Developer Dashboard.
+
+   **PayPal Sandbox Client Secret** — paste the Client Secret you copied.
+
+6. Leave the **Live** key fields empty for now — those are only used in production.
+
+7. Click **Save Settings** at the bottom of the page.
+
+---
+
+## Step 4 — Set Up a Webhook (Recommended)
+
+Webhooks allow PayPal to notify your site when payments complete, fail, or are refunded — even if the donor closes their browser before the page redirects. Without a webhook, some payment statuses may not update correctly.
+
+### 4a — Copy your Webhook URL
+
+Back in your GiftFlow settings (still on the Payment tab, inside the PayPal section), look at the description next to the **Enable Webhook** toggle. Your webhook URL is shown there and looks like this:
+
+```
+https://your-site.com/wp-admin/admin-ajax.php?action=giftflow_paypal_webhook
+```
+
+Copy that full URL.
+
+<Callout type="info">
+If your site is on localhost or a private network (e.g. a Local by Flywheel site), PayPal cannot reach your webhook URL from the internet. Use a tunneling tool such as [ngrok](https://ngrok.com) or [Expose](https://expose.dev) to create a public HTTPS URL, and use that public URL as your webhook endpoint during testing.
+</Callout>
+
+### 4b — Create the Webhook in PayPal
+
+1. In the PayPal Developer Dashboard, still in **Sandbox** mode, click **My Apps & Credentials** and open the app you created in Step 2.
+
+2. Scroll down to find the **Webhooks** section and click **Add Webhook**.
+
+3. Paste your webhook URL into the **Webhook URL** field.
+
+4. Under **Event types**, select the following events:
+
+   **For one-time payments:**
+   - Checkout order approved
+   - Checkout order completed
+   - Payment capture completed
+   - Payment capture denied
+   - Payment capture refunded
+   - Payment sale completed
+   - Payment sale denied
+
+   **Additionally for recurring donations (if enabled):**
+   - Billing subscription created
+   - Billing subscription activated
+   - Billing subscription cancelled
+
+5. Click **Save**.
+
+6. After saving, PayPal shows your new webhook in the list. Click on it to open the detail page. You will see a **Webhook ID** — a string that looks like `7AB15108KJ780482N`. **Copy this Webhook ID**.
+
+### 4c — Enter the Webhook ID in GiftFlow
+
+1. Go back to **GiftFlow → Settings → Payment → PayPal**.
+
+2. Turn on the **Enable Webhook** toggle.
+
+3. Paste the Webhook ID into the **Webhook ID** field.
+
+4. Click **Save Settings**.
+
+<Callout type="info"> 
+PayPal uses a Webhook ID for signature verification — this is different from Stripe, which uses a signing secret string. The Webhook ID is the unique identifier of the endpoint you just created in the PayPal Dashboard, and GiftFlow uses it to verify that incoming webhook calls are genuinely from PayPal.
+
+In sandbox mode, if you leave the Webhook ID field empty, GiftFlow will still accept webhook calls without signature verification. In live mode, the Webhook ID is required — webhooks will be rejected if it is missing.
+</Callout>
+
+---
+
+## Step 5 — Find Your Sandbox Buyer Account
+
+To test a payment you need to log in to the PayPal popup using a sandbox **buyer** account. PayPal creates these automatically when you create your Developer account.
+
+1. In the PayPal Developer Dashboard, go to **Sandbox → Accounts** in the left sidebar.
+
+2. You will see a list of pre-created sandbox accounts. Look for the one with the type **Personal** — this is your buyer account.
+
+3. Click the three-dot menu (⋮) next to the Personal account and choose **View/Edit account**.
+
+4. Note the **Email ID** and **Password** — you will use these to log in during the test payment.
+
+<Callout type="info">
+You can create additional sandbox buyer accounts here if you want to test different scenarios (e.g. different countries or PayPal balances).
+</Callout>
+
+---
+
+## Step 6 — Test a Payment
+
+Now verify everything is working end-to-end.
+
+1. Visit your site as a regular visitor and open a campaign page.
+
+2. Click **Donate Now** (or fill in a donation form).
+
+3. Select **PayPal** as the payment method. You will see a notice:
+   > **You are currently in PayPal Sandbox Mode.** This is a test environment. No real payments will be processed.
+
+4. Enter a donation amount, your name, and your email address, then click the **PayPal** button.
+
+5. A PayPal popup window will appear. Log in using the **sandbox buyer account** email and password you found in Step 5.
+
+6. Review the payment summary in the popup and click **Approve** (or **Pay Now**).
+
+7. The popup closes and the donation form shows the success screen.
+
+8. Go to **GiftFlow → Donations** in your WordPress admin to confirm the donation was recorded with a **Completed** status.
+
+---
+
+## Step 7 — Optional: Enable Recurring Donations
+
+The **Enable Recurring Donations** toggle allows donors to set up a repeating PayPal Subscription (monthly, yearly, etc.) instead of a one-time payment. When you turn this on:
+
+- The donation form shows an option for donors to choose a recurring interval
+- Donations are processed through PayPal Subscriptions (Billing Plans)
+- A **PayPal Donation Product** must be created before subscriptions can work
+
+When this setting is first enabled, GiftFlow will show a notice in the WordPress admin:
+> **GiftFlow — PayPal Recurring: PayPal Donation Product has not been created yet.**
+
+Click the **Create PayPal Product** button in that notice to create the required PayPal product automatically. This only needs to be done once per environment (once for sandbox, once for live).
+
+<Callout type="info">
+Webhooks are required for recurring donations to work reliably, because PayPal sends subscription payment confirmations asynchronously. Make sure the **Enable Webhook** toggle is on and your Webhook ID is entered before testing recurring donations.
+</Callout>
+
+---
+
+## Going Live
+
+When you are ready to accept real PayPal payments:
+
+1. In the PayPal Developer Dashboard, switch the toggle from **Sandbox** to **Live**.
+
+2. Click **My Apps & Credentials** and create a new app (or use an existing one) under **Live** mode.
+
+3. Copy your **Live Client ID** and **Live Client Secret**.
+
+4. In **GiftFlow → Settings → Payment → PayPal**, paste both live credentials into the **PayPal Live Client ID** and **PayPal Live Client Secret** fields.
+
+5. Change **PayPal Mode** from **Sandbox (Test Mode)** to **Live (Production Mode)**.
+
+6. Create a new webhook endpoint under your live app in the PayPal Developer Dashboard (same events as Step 4b), copy the **Webhook ID**, and paste it into the **Webhook ID** field in GiftFlow.
+
+7. Click **Save Settings**.
+
+<Callout type="warning"> 
+Before going live, make sure your PayPal Business account is verified and your bank account is linked in the PayPal Business settings. Payouts cannot be sent until your account is fully verified.
+</Callout>
+
+---
+
+## Troubleshooting
+
+**The PayPal button does not appear on the donation form**
+- Confirm that **Enable PayPal** is toggled on and settings are saved.
+- Check that your **Sandbox Client ID** is entered correctly and is not truncated.
+- Open your browser's developer console and look for any JavaScript errors related to the PayPal SDK.
+- Make sure your site currency (set in **GiftFlow → Settings → General**) is supported by PayPal in sandbox mode.
+
+**The PayPal popup opens but closes immediately or shows an error**
+- Double-check that both the **Sandbox Client ID** and **Sandbox Client Secret** are entered correctly without extra spaces.
+- Confirm that the Client ID and Secret belong to the same sandbox app.
+
+**The donation shows as "Pending" after the payment is approved**
+- This is usually a webhook issue. Make sure **Enable Webhook** is on, your webhook endpoint is created in PayPal, and the **Webhook ID** field is filled in.
+- In the PayPal Developer Dashboard, open your sandbox app, go to **Webhooks**, click your endpoint, and check **Recent deliveries** for any failed attempts.
+- If your site is on localhost, PayPal cannot send webhooks to it — use a tunnel as described in Step 4a.
+
+**I see "PayPal is not properly configured" or the button fails silently**
+- Both the **Client ID** and **Client Secret** are required. If either field is empty, GiftFlow cannot create orders. Re-enter both and save.
+
+**Webhook calls arrive but the donation status does not update**
+- Check that the Webhook ID in GiftFlow matches exactly what is shown in your PayPal Developer Dashboard for the sandbox app's webhook endpoint.
+- In sandbox mode, GiftFlow skips signature verification when the Webhook ID field is empty — so if you are testing without a Webhook ID, remove it from the field rather than leaving a wrong value.
+
+---
+
+## Summary
+
+| Setting | Value for Sandbox |
+|---|---|
+| PayPal Mode | Sandbox (Test Mode) |
+| Sandbox Client ID | From PayPal Developer Dashboard → Sandbox → Apps & Credentials → your app |
+| Sandbox Client Secret | From PayPal Developer Dashboard → Sandbox → Apps & Credentials → your app → Show |
+| Webhook URL | `https://your-site.com/wp-admin/admin-ajax.php?action=giftflow_paypal_webhook` |
+| Webhook ID | From PayPal Developer Dashboard → your sandbox app → Webhooks → your endpoint |
+| Test buyer email | From PayPal Developer Dashboard → Sandbox → Accounts → Personal account |
+| Test buyer password | From PayPal Developer Dashboard → Sandbox → Accounts → Personal account → View/Edit |

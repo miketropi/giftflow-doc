@@ -1,0 +1,253 @@
+---
+title: "Configure Stripe (Sandbox / Test Mode)"
+description: "Step-by-step guide for connecting GiftFlow to Stripe in sandbox mode so you can test payments before going live."
+sidebar_position: 10
+tags:
+  - "stripe"
+  - "payment"
+  - "sandbox"
+  - "setup"
+  - "getting-started"
+---
+
+This guide walks you through connecting GiftFlow to Stripe in **Sandbox (Test) Mode**. Sandbox mode lets you run real payment flows — entering card numbers, receiving confirmation emails, and seeing donations recorded in WordPress — without charging any real money.
+
+Complete this setup before you go live. When you are ready to accept real donations, you only need to swap the sandbox keys for your live keys and change the mode to **Live**.
+
+---
+
+## What You Will Need
+
+- A free [Stripe account](https://dashboard.stripe.com/register)
+- Administrator access to your WordPress site
+- About 10 minutes
+
+---
+
+## Step 1 — Create a Stripe Account
+
+If you do not have a Stripe account yet:
+
+1. Go to **[https://dashboard.stripe.com/register](https://dashboard.stripe.com/register)**
+2. Enter your email address, full name, and a password, then click **Create account**
+3. Stripe will send a confirmation email — click the link inside to verify your address
+4. Log in to your new Stripe Dashboard
+
+:::note You do not need to complete business verification to use sandbox mode. Test keys are available immediately after registration.
+:::
+
+---
+
+## Step 2 — Get Your Sandbox API Keys
+
+Once you are logged in to the Stripe Dashboard:
+
+1. Make sure you are in **Test mode** — look for the **"Test mode"** toggle in the top-right area of the dashboard. It should be switched **on** (the label shows "Test mode").
+
+2. In the left sidebar, click **Developers**, then click **API keys**.
+
+3. You will see two keys under the **Standard keys** section:
+
+   | Key | Starts with | What it does |
+   |---|---|---|
+   | **Publishable key** | `pk_test_…` | Used on the frontend (safe to expose) |
+   | **Secret key** | `sk_test_…` | Used on the server (keep private) |
+
+4. Copy both keys — you will paste them into GiftFlow in the next step.
+
+   To reveal the secret key, click **Reveal test key** next to it.
+
+:::warning Keep your Secret key private. Never share it publicly, put it in Git, or paste it anywhere except your WordPress settings page.
+:::
+
+---
+
+## Step 3 — Enter the Keys in GiftFlow
+
+1. Log in to your **WordPress Admin**.
+
+2. In the left sidebar, go to **GiftFlow → Settings**.
+
+3. Click the **Payment** tab.
+
+4. Scroll down to find the **Stripe (Credit Card)** section and click on it to expand it.
+
+5. Fill in the fields:
+
+   **Enable Stripe** — turn this toggle **on**.
+
+   **Stripe Mode** — select **Sandbox (Test Mode)** from the dropdown.
+
+   **Stripe Sandbox Publishable Key** — paste your `pk_test_…` key here.
+
+   **Stripe Sandbox Secret Key** — paste your `sk_test_…` key here.
+
+6. Leave the **Live** key fields empty for now — those are only used when you switch to production.
+
+7. Click **Save Settings** at the bottom of the page.
+
+---
+
+## Step 4 — Set Up a Webhook (Recommended)
+
+Webhooks allow Stripe to notify your site when a payment is confirmed, failed, or refunded — even if the donor closes their browser before the page redirects. Without a webhook, some payment statuses may not update reliably.
+
+### 4a — Copy your Webhook URL
+
+Back in your GiftFlow settings (still on the Payment tab, inside the Stripe section), look at the description next to the **Enable Webhook** toggle. You will see your webhook URL — it looks like this:
+
+```
+https://your-site.com/wp-admin/admin-ajax.php?action=giftflow_stripe_webhook
+```
+
+Copy that full URL.
+
+### 4b — Create the Webhook in Stripe
+
+1. In the Stripe Dashboard (still in **Test mode**), go to **Developers → Webhooks**.
+
+2. Click **Add endpoint**.
+
+3. Paste your webhook URL into the **Endpoint URL** field.
+
+4. Under **Events to send**, click **Select events** and add the following events:
+
+   **For one-time payments:**
+   - `payment_intent.succeeded`
+   - `payment_intent.payment_failed`
+   - `payment_intent.canceled`
+   - `charge.refunded`
+
+   **Additionally for recurring donations (if enabled):**
+   - `invoice.paid`
+   - `invoice.payment_failed`
+   - `customer.subscription.deleted`
+   - `customer.subscription.updated`
+
+5. Click **Add endpoint** to save.
+
+6. Stripe will show you the newly created endpoint. Click **Reveal** under **Signing secret** to see the webhook secret — it starts with `whsec_`.
+
+### 4c — Enter the Webhook Secret in GiftFlow
+
+1. Go back to **GiftFlow → Settings → Payment → Stripe (Credit Card)**.
+
+2. Turn on the **Enable Webhook** toggle.
+
+3. Paste the `whsec_…` value into the **Stripe Sandbox Webhook Secret** field.
+
+4. Click **Save Settings**.
+
+---
+
+## Step 5 — Test a Payment
+
+Now verify everything is working end-to-end.
+
+1. Visit your site as a regular visitor and open a campaign page.
+
+2. Click **Donate Now** (or fill in a donation form).
+
+3. Choose **Credit Card (Stripe)** as the payment method.
+
+   You will see a notice on the form:
+   > **You are currently in Stripe Sandbox Mode.** To test your payment, use the test card number `4242 4242 4242 4242` with any CVC and any valid future expiration date.
+
+4. Fill in the card fields using these **Stripe test card** details:
+
+   | Field | Value |
+   |---|---|
+   | **Card Number** | `4242 4242 4242 4242` |
+   | **Expiry Date** | Any future date, e.g. `12/34` |
+   | **CVC** | Any 3 digits, e.g. `123` |
+   | **Name on Card** | Any name |
+
+5. Enter a donation amount, your name, and email, then submit the form.
+
+6. If everything is configured correctly, the donation will complete and you will see the success screen.
+
+7. Go to **GiftFlow → Donations** in the WordPress admin to confirm the donation was recorded with a **Completed** status.
+
+### Additional test cards
+
+| Scenario | Card Number |
+|---|---|
+| Successful payment | `4242 4242 4242 4242` |
+| Requires 3D Secure authentication | `4000 0025 0000 3155` |
+| Card declined | `4000 0000 0000 0002` |
+| Insufficient funds | `4000 0000 0000 9995` |
+
+For all test cards, use any future expiry date and any 3-digit CVC.
+
+---
+
+## Step 6 — Optional Settings
+
+### Enable Apple Pay and Google Pay
+
+In the Stripe section, you will see an **Enable Apple Pay + Google Pay** toggle. When this is turned on, Stripe automatically detects the donor's device and browser and shows Apple Pay (on Apple devices in Safari) or Google Pay (on Chrome) as an additional payment option alongside the card form.
+
+:::note Apple Pay and Google Pay require your site to be served over HTTPS and your Stripe account domain to be registered in the Stripe Dashboard under **Settings → Payment methods → Apple Pay**.
+:::
+
+### Enable Recurring Donations
+
+The **Enable Recurring Donations** toggle allows donors to choose a recurring interval (monthly, yearly, etc.) on the donation form. Recurring donations are processed through Stripe Subscriptions. When this is on, per-campaign recurring options become available in each campaign's **Campaign Details** settings.
+
+:::note Webhooks are required for recurring donations to work correctly, because Stripe sends renewal payment confirmations asynchronously via webhooks.
+:::
+
+---
+
+## Going Live
+
+When you are ready to accept real donations:
+
+1. Log in to the Stripe Dashboard and switch to **Live mode** using the toggle in the top-right.
+
+2. Go to **Developers → API keys** and copy your **Live** publishable key (`pk_live_…`) and secret key (`sk_live_…`).
+
+3. In **GiftFlow → Settings → Payment → Stripe**, enter both live keys into the **Stripe Live Publishable Key** and **Stripe Live Secret Key** fields.
+
+4. Change **Stripe Mode** from **Sandbox (Test Mode)** to **Live (Production Mode)**.
+
+5. Create a new webhook endpoint in the Stripe Dashboard under **Live mode → Developers → Webhooks** pointing to the same webhook URL as before, copy the new webhook signing secret, and paste it into the **Stripe Live Webhook Secret** field.
+
+6. Click **Save Settings**.
+
+:::warning Before going live, make sure you have completed Stripe's account verification (business details, bank account, etc.) in your Stripe Dashboard under **Settings → Business details** and **Settings → Bank accounts**. Payouts will not be sent until verification is complete.
+:::
+
+---
+
+## Troubleshooting
+
+**The Stripe card form does not appear on the donation form**
+- Confirm that **Enable Stripe** is toggled on and the settings are saved.
+- Check that your Sandbox Publishable Key is entered correctly and starts with `pk_test_`.
+- Make sure there are no JavaScript errors in your browser's developer console.
+
+**The donation shows as "Pending" instead of "Completed"**
+- This is usually a webhook issue. Confirm that the webhook endpoint is created in Stripe, the **Enable Webhook** toggle is on in GiftFlow, and the **Stripe Sandbox Webhook Secret** matches the signing secret shown in your Stripe Dashboard.
+- In the Stripe Dashboard under **Developers → Webhooks**, click your endpoint to see recent delivery attempts and any error messages.
+
+**Test payment fails with "Payment failed. Please try again."**
+- Double-check that you are using a valid test card number (`4242 4242 4242 4242`).
+- Confirm your Sandbox Secret Key is entered correctly and has not been truncated.
+
+**I see "Stripe is not properly configured" error**
+- This means the Secret Key field is empty or incorrectly entered. Go back to **GiftFlow → Settings → Payment → Stripe** and re-paste the `sk_test_…` key, then save.
+
+---
+
+## Summary
+
+| Setting | Value for Sandbox |
+|---|---|
+| Stripe Mode | Sandbox (Test Mode) |
+| Publishable Key | `pk_test_…` (from Stripe Dashboard → Test mode → API keys) |
+| Secret Key | `sk_test_…` (from Stripe Dashboard → Test mode → API keys) |
+| Webhook Secret | `whsec_…` (from Stripe Dashboard → Test mode → Webhooks → your endpoint) |
+| Test card number | `4242 4242 4242 4242` |
+| Test expiry | Any future date |
+| Test CVC | Any 3 digits |

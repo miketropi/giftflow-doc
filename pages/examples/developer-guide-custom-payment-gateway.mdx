@@ -1,0 +1,739 @@
+---
+title: "How to Add a Custom Payment Gateway"
+description: "Step-by-step developer guide for creating and registering a custom payment gateway in GiftFlow by extending Gateway_Base."
+sidebar_position: 4
+tags:
+  - "giftflow"
+  - "developer"
+  - "payment-gateway"
+  - "extension"
+---
+
+GiftFlow's payment system is fully extensible. Every gateway — Stripe, PayPal, Direct Bank Transfer — is built on a shared abstract class `GiftFlow\Gateways\Gateway_Base`. Creating your own gateway means extending that class, implementing three required methods, and registering your gateway on the `giftflow_register_gateways` action hook. No core files need to be touched.
+
+---
+
+## How the Gateway System Works
+
+When GiftFlow boots, `Gateway_Base::init_gateways()` fires the `giftflow_register_gateways` action. Any class instantiated inside that action hook is automatically:
+
+- Added to the global gateway registry
+- Given its settings loaded from `giftflow_payment_options`
+- Registered in the **Settings → Payment** tab via `giftflow_payment_methods_settings`
+- Listed in the donation form via `giftflow_payment_gateways` filter
+- Wired to enqueue its assets on `wp_enqueue_scripts` / `admin_enqueue_scripts`
+
+The full lifecycle inside `Gateway_Base::__construct()` is:
+
+```
+__construct()
+  ├── init_gateway()       ← you set $id, $title, $icon, $order, $supports
+  ├── init_settings()      ← loads saved options from giftflow_payment_options[$id]
+  ├── ready()              ← optional: SDK init, asset registration
+  ├── init_hooks()         ← registers base hooks + calls init_additional_hooks()
+  │     └── init_additional_hooks()  ← optional: AJAX handlers, webhooks
+  └── register_gateway()   ← adds $this to static $gateway_registry[$id]
+```
+
+The `Forms` class resolves the gateway at submission time:
+
+```php
+$pm_obj = Gateway_Base::get_gateway( $data['payment_method'] );
+$payment_result = $pm_obj->process_payment( $data, $donation_id );
+```
+
+So `process_payment()` is your main entry point.
+
+---
+
+## File Structure
+
+The recommended structure for a gateway built as a standalone plugin:
+
+```
+wp-content/plugins/my-gateway/
+├── my-gateway.php                  ← plugin entry point
+├── class-my-gateway.php            ← gateway class
+└── templates/
+    └── payment-gateway/
+        └── my-gateway-template.php ← frontend form HTML
+```
+
+---
+
+## Step 1 — Create the Plugin Entry File
+
+```php
+<?php
+/**
+ * Plugin Name: My Payment Gateway for GiftFlow
+ * Description: Adds My Gateway as a payment option in GiftFlow.
+ * Version:     1.0.0
+ * Requires Plugins: giftflow
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+define( 'MY_GATEWAY_DIR', plugin_dir_path( __FILE__ ) );
+define( 'MY_GATEWAY_URL', plugin_dir_url( __FILE__ ) );
+
+// Load the gateway class after GiftFlow is fully loaded
+add_action( 'plugins_loaded', function() {
+    if ( ! class_exists( '\GiftFlow\Gateways\Gateway_Base' ) ) {
+        return; // GiftFlow not active
+    }
+    require_once MY_GATEWAY_DIR . 'class-my-gateway.php';
+}, 20 );
+```
+
+---
+
+## Step 2 — Create the Gateway Class
+
+```php
+<?php
+/**
+ * My Custom Payment Gateway for GiftFlow
+ */
+
+use GiftFlow\Core\Donations;
+use GiftFlow\Core\Logger as Giftflow_Logger;
+use GiftFlow\Core\Donation_Event_History;
+
+class My_Custom_Gateway extends \GiftFlow\Gateways\Gateway_Base {
+
+    // ─────────────────────────────────────────────
+    // STEP 2A — Gateway Identity
+    // ─────────────────────────────────────────────
+
+    /**
+     * Set gateway identity properties.
+     * Called first inside __construct().
+     */
+    protected function init_gateway() {
+        $this->id          = 'my_gateway';        // Unique slug — must match the enabled field prefix
+        $this->title       = __( 'My Gateway', 'my-gateway' );
+        $this->description = __( 'Pay securely via My Gateway.', 'my-gateway' );
+
+        // SVG icon (inline) or image URL string
+        $this->icon = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" x2="12" y1="8" y2="12"/>
+            <line x1="12" x2="12.01" y1="16" y2="16"/>
+        </svg>';
+
+        $this->order    = 30;           // Display order in the donation form (lower = first)
+        $this->supports = array();      // Optional: 'webhooks', 'recurring', etc.
+    }
+
+
+    // ─────────────────────────────────────────────
+    // STEP 2B — SDK or API Initialization (optional)
+    // ─────────────────────────────────────────────
+
+    /**
+     * Called after init_settings(), before init_hooks().
+     * Use this to initialize any SDK or API client with stored keys.
+     */
+    protected function ready() {
+        $api_key = $this->get_setting( 'my_gateway_api_key' );
+
+        if ( ! empty( $api_key ) ) {
+            // e.g. MySDK::setApiKey( $api_key );
+        }
+
+        // Register frontend assets (will be enqueued only when gateway is enabled)
+        $this->add_script(
+            'my-gateway-js',
+            array(
+                'src'       => MY_GATEWAY_URL . 'assets/js/my-gateway.js',
+                'deps'      => array( 'jquery', 'giftflow-donation-forms' ),
+                'version'   => '1.0.0',
+                'frontend'  => true,   // enqueue on frontend
+                'admin'     => false,  // not on admin
+                'in_footer' => true,
+                'localize'  => array(
+                    'name' => 'myGatewayData',
+                    'data' => array(
+                        'ajaxurl'   => admin_url( 'admin-ajax.php' ),
+                        'nonce'     => wp_create_nonce( 'my_gateway_nonce' ),
+                        'api_key'   => $this->get_setting( 'my_gateway_publishable_key' ),
+                        'messages'  => array(
+                            'processing' => __( 'Processing payment...', 'my-gateway' ),
+                            'error'      => __( 'Payment failed. Please try again.', 'my-gateway' ),
+                        ),
+                    ),
+                ),
+            )
+        );
+
+        // Optional: enqueue a stylesheet
+        $this->add_style(
+            'my-gateway-css',
+            array(
+                'src'      => MY_GATEWAY_URL . 'assets/css/my-gateway.css',
+                'deps'     => array(),
+                'version'  => '1.0.0',
+                'frontend' => true,
+                'admin'    => false,
+                'media'    => 'all',
+            )
+        );
+    }
+
+
+    // ─────────────────────────────────────────────
+    // STEP 2C — AJAX / Webhook Hooks (optional)
+    // ─────────────────────────────────────────────
+
+    /**
+     * Register any AJAX handlers, webhook listeners, or extra WP hooks.
+     * Called inside init_hooks() after base hooks are set up.
+     */
+    protected function init_additional_hooks() {
+        // Webhook endpoint — accessible via:
+        //   /wp-admin/admin-ajax.php?action=my_gateway_webhook
+        add_action( 'wp_ajax_my_gateway_webhook',        array( $this, 'handle_webhook' ) );
+        add_action( 'wp_ajax_nopriv_my_gateway_webhook', array( $this, 'handle_webhook' ) );
+    }
+
+    /**
+     * Handle incoming webhook from My Gateway's servers.
+     */
+    public function handle_webhook() {
+        $payload = file_get_contents( 'php://input' );
+        $data    = json_decode( $payload, true );
+
+        if ( empty( $data ) ) {
+            status_header( 400 );
+            exit;
+        }
+
+        // Verify webhook signature (implementation depends on your gateway)
+        // if ( ! $this->verify_webhook_signature( $payload ) ) {
+        //     status_header( 401 );
+        //     exit;
+        // }
+
+        $event = sanitize_text_field( $data['event'] ?? '' );
+
+        switch ( $event ) {
+            case 'payment.succeeded':
+                $donation_id = absint( $data['metadata']['donation_id'] ?? 0 );
+                if ( $donation_id ) {
+                    $donations = new Donations();
+                    $donations->update_status( $donation_id, 'completed' );
+                    Donation_Event_History::add(
+                        $donation_id,
+                        'payment_succeeded',
+                        'completed',
+                        'Webhook: payment confirmed',
+                        array( 'gateway' => $this->id, 'transaction_id' => $data['id'] ?? '' )
+                    );
+                    do_action( 'giftflow_donation_after_payment_processed', $donation_id, true );
+                }
+                break;
+
+            case 'payment.failed':
+                $donation_id = absint( $data['metadata']['donation_id'] ?? 0 );
+                if ( $donation_id ) {
+                    $donations = new Donations();
+                    $donations->update_status( $donation_id, 'failed' );
+                    Donation_Event_History::add(
+                        $donation_id,
+                        'payment_failed',
+                        'failed',
+                        $data['error']['message'] ?? '',
+                        array( 'gateway' => $this->id )
+                    );
+                }
+                break;
+        }
+
+        status_header( 200 );
+        exit;
+    }
+
+
+    // ─────────────────────────────────────────────
+    // STEP 2D — Settings Fields (required)
+    // ─────────────────────────────────────────────
+
+    /**
+     * Register settings fields in Settings → Payment tab.
+     * The field name convention must be: giftflow_payment_options[{gateway_id}][{field_name}]
+     * The enable field must be named exactly: {gateway_id}_enabled
+     *
+     * @param array $payment_fields Existing payment fields from other gateways.
+     * @return array
+     */
+    public function register_settings_fields( $payment_fields = array() ) {
+        $payment_options = get_option( 'giftflow_payment_options' );
+        $opts            = $payment_options['my_gateway'] ?? array();
+
+        $payment_fields['my_gateway'] = array(
+            'id'                 => 'giftflow_my_gateway',
+            'name'               => 'giftflow_payment_options[my_gateway]',
+            'type'               => 'accordion',
+            'label'              => $this->title,
+            'description'        => __( 'Configure My Gateway settings.', 'my-gateway' ),
+            'accordion_settings' => array(
+                'label'   => __( 'My Gateway Settings', 'my-gateway' ),
+                'is_open' => true,
+                'fields'  => array(
+
+                    // ── REQUIRED: enable/disable toggle ──────────────────────────
+                    // The field key MUST follow the pattern: {gateway_id}_enabled
+                    // Gateway_Base::init_settings() reads this to set $this->enabled
+                    'my_gateway_enabled' => array(
+                        'id'          => 'giftflow_my_gateway_enabled',
+                        'type'        => 'switch',
+                        'label'       => __( 'Enable My Gateway', 'my-gateway' ),
+                        'value'       => $opts['my_gateway_enabled'] ?? false,
+                        'description' => __( 'Enable My Gateway as a payment method.', 'my-gateway' ),
+                    ),
+
+                    // ── Additional settings ───────────────────────────────────────
+                    'my_gateway_mode' => array(
+                        'id'      => 'giftflow_my_gateway_mode',
+                        'type'    => 'select',
+                        'label'   => __( 'Mode', 'my-gateway' ),
+                        'value'   => $opts['my_gateway_mode'] ?? 'sandbox',
+                        'options' => array(
+                            'sandbox' => __( 'Sandbox (Test)', 'my-gateway' ),
+                            'live'    => __( 'Live', 'my-gateway' ),
+                        ),
+                    ),
+
+                    'my_gateway_api_key' => array(
+                        'id'          => 'giftflow_my_gateway_api_key',
+                        'type'        => 'textfield',
+                        'label'       => __( 'Secret Key', 'my-gateway' ),
+                        'value'       => $opts['my_gateway_api_key'] ?? '',
+                        'description' => __( 'Your My Gateway secret API key.', 'my-gateway' ),
+                    ),
+
+                    'my_gateway_publishable_key' => array(
+                        'id'          => 'giftflow_my_gateway_publishable_key',
+                        'type'        => 'textfield',
+                        'label'       => __( 'Publishable Key', 'my-gateway' ),
+                        'value'       => $opts['my_gateway_publishable_key'] ?? '',
+                        'description' => __( 'Your My Gateway publishable key (safe to expose in JS).', 'my-gateway' ),
+                    ),
+
+                    'my_gateway_webhook_url' => array(
+                        'id'    => 'giftflow_my_gateway_webhook_url',
+                        'type'  => 'html',
+                        'label' => __( 'Webhook URL', 'my-gateway' ),
+                        'html'  => '<code>' . admin_url( 'admin-ajax.php?action=my_gateway_webhook' ) . '</code>',
+                    ),
+                ),
+            ),
+        );
+
+        return $payment_fields;
+    }
+
+
+    // ─────────────────────────────────────────────
+    // STEP 2E — Frontend Form Template (required)
+    // ─────────────────────────────────────────────
+
+    /**
+     * Render the payment method UI inside the donation form.
+     * This is called directly inside the payment method selection step.
+     */
+    public function template_html() {
+        giftflow_load_template(
+            'payment-gateway/my-gateway-template.php',
+            array(
+                'id'    => $this->id,
+                'title' => $this->title,
+                'icon'  => $this->icon,
+                'mode'  => $this->get_setting( 'my_gateway_mode', 'sandbox' ),
+            ),
+            // Optional: third param overrides the base template path
+            // (leave empty to use GiftFlow's default lookup which also checks your theme)
+        );
+    }
+
+
+    // ─────────────────────────────────────────────
+    // STEP 2F — Process Payment (required)
+    // ─────────────────────────────────────────────
+
+    /**
+     * Process the payment. Called by Forms::process_payment() via AJAX.
+     *
+     * $data contains the sanitized POST fields from the donation form:
+     *   - donation_amount (float)
+     *   - donor_name     (string)
+     *   - donor_email    (string)
+     *   - payment_method (string) — will be 'my_gateway'
+     *   - campaign_id    (int)
+     *   - donation_type  (string) — 'one-time' or 'recurring'
+     *   - wp_nonce       (string)
+     *   - Any extra hidden fields from your template_html()
+     *
+     * Return:
+     *   - true (or any truthy non-WP_Error) on success
+     *   - WP_Error on failure
+     *   - array with extra data (e.g. redirect URL) — forwarded to JS success handler
+     *
+     * @param array $data        Sanitized form fields.
+     * @param int   $donation_id Donation post ID (already created as 'pending').
+     * @return true|array|\WP_Error
+     */
+    public function process_payment( $data, $donation_id = 0 ) {
+        if ( ! $donation_id ) {
+            return new \WP_Error( 'my_gateway_error', __( 'Donation ID is required.', 'my-gateway' ) );
+        }
+
+        $api_key = $this->get_setting( 'my_gateway_api_key' );
+        if ( empty( $api_key ) ) {
+            return new \WP_Error( 'my_gateway_error', __( 'My Gateway is not configured.', 'my-gateway' ) );
+        }
+
+        try {
+            // ── 1. Call your payment API ──────────────────────────────────────
+            $charge = $this->charge_api( array(
+                'amount'   => floatval( $data['donation_amount'] ),
+                'email'    => sanitize_email( $data['donor_email'] ),
+                'token'    => sanitize_text_field( $data['my_gateway_token'] ?? '' ),
+                'metadata' => array(
+                    'donation_id' => $donation_id,
+                    'campaign_id' => intval( $data['campaign_id'] ?? 0 ),
+                    'donor_name'  => sanitize_text_field( $data['donor_name'] ?? '' ),
+                ),
+            ) );
+
+            // ── 2. Handle API response ────────────────────────────────────────
+            if ( is_wp_error( $charge ) ) {
+                $this->log_payment_failed( $donation_id, $charge->get_error_message() );
+                return $charge;
+            }
+
+            // ── 3. Update donation meta ───────────────────────────────────────
+            update_post_meta( $donation_id, '_payment_method', $this->id );
+            update_post_meta( $donation_id, '_transaction_id', sanitize_text_field( $charge['id'] ) );
+            update_post_meta( $donation_id, '_transaction_raw_data', wp_json_encode( $charge ) );
+
+            // ── 4. Update donation status ─────────────────────────────────────
+            $donations = new Donations();
+            $donations->update_status( $donation_id, 'completed' );
+
+            // ── 5. Write to event history (visible in admin donation edit) ────
+            Donation_Event_History::add(
+                $donation_id,
+                'payment_succeeded',
+                'completed',
+                '',
+                array(
+                    'gateway'        => $this->id,
+                    'transaction_id' => $charge['id'],
+                )
+            );
+
+            // ── 6. Write to GiftFlow logger (visible in admin dashboard logs) ─
+            Giftflow_Logger::info(
+                'my_gateway.payment.succeeded',
+                array(
+                    'donation_id'    => $donation_id,
+                    'transaction_id' => $charge['id'],
+                    'amount'         => $data['donation_amount'],
+                ),
+                'my_gateway'
+            );
+
+            // ── 7. Return success ─────────────────────────────────────────────
+            // Return true for a standard success, or an array to pass extra data
+            // to the JavaScript success handler (e.g. a redirect URL)
+            return true;
+
+            // Example with redirect:
+            // return array(
+            //     'redirect_url' => get_permalink( giftflow_get_thank_donor_page() ),
+            // );
+
+        } catch ( \Exception $e ) {
+            $this->log_payment_failed( $donation_id, $e->getMessage() );
+            return new \WP_Error( 'my_gateway_error', $e->getMessage() );
+        }
+    }
+
+
+    // ─────────────────────────────────────────────
+    // Private Helpers
+    // ─────────────────────────────────────────────
+
+    /**
+     * Make a charge request to My Gateway's API.
+     * Replace with your actual SDK or HTTP call.
+     *
+     * @param array $args
+     * @return array|\WP_Error
+     */
+    private function charge_api( $args ) {
+        $response = wp_remote_post(
+            'https://api.mygateway.example/v1/charges',
+            array(
+                'headers' => array(
+                    'Authorization' => 'Bearer ' . $this->get_setting( 'my_gateway_api_key' ),
+                    'Content-Type'  => 'application/json',
+                ),
+                'body'    => wp_json_encode( $args ),
+                'timeout' => 30,
+            )
+        );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        $body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+        if ( wp_remote_retrieve_response_code( $response ) !== 200 ) {
+            return new \WP_Error(
+                'my_gateway_api_error',
+                $body['error']['message'] ?? __( 'Payment API error.', 'my-gateway' )
+            );
+        }
+
+        return $body;
+    }
+
+    /**
+     * Log a failed payment to GiftFlow's event history and logger.
+     *
+     * @param int    $donation_id
+     * @param string $message
+     */
+    private function log_payment_failed( $donation_id, $message ) {
+        Donation_Event_History::add(
+            $donation_id,
+            'payment_failed',
+            'failed',
+            $message,
+            array( 'gateway' => $this->id )
+        );
+
+        Giftflow_Logger::error(
+            'my_gateway.payment.failed',
+            array(
+                'donation_id'   => $donation_id,
+                'error_message' => $message,
+            ),
+            'my_gateway'
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 3 — Register the Gateway
+// ─────────────────────────────────────────────────────────────────────────────
+// Instantiate inside giftflow_register_gateways, which fires inside
+// Gateway_Base::init_gateways() on the `init` hook.
+
+add_action( 'giftflow_register_gateways', function() {
+    new My_Custom_Gateway();
+} );
+```
+
+---
+
+## Step 3 — Create the Frontend Template
+
+Save this as `templates/payment-gateway/my-gateway-template.php` **inside your plugin**. GiftFlow's template loader will find it by theme override first, then falls back here.
+
+```php
+<?php
+/**
+ * My Gateway Payment Template
+ *
+ * Available variables (passed by template_html()):
+ *   $id    — gateway slug ('my_gateway')
+ *   $title — gateway display title
+ *   $icon  — SVG icon HTML
+ *   $mode  — 'sandbox' or 'live'
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+?>
+
+<!-- Payment method radio selector -->
+<label class="donation-form__payment-method">
+    <input type="radio" name="payment_method" value="<?php echo esc_attr( $id ); ?>" required>
+    <span class="donation-form__payment-method-content">
+        <?php echo wp_kses( $icon, giftflow_allowed_svg_tags() ); ?>
+        <span class="donation-form__payment-method-title"><?php echo esc_html( $title ); ?></span>
+    </span>
+</label>
+
+<!-- Expanded details shown when this method is selected -->
+<div class="donation-form__payment-method-description donation-form__payment-method-description--my-gateway donation-form__fields">
+
+    <?php if ( 'sandbox' === $mode ) : ?>
+    <div class="donation-form__payment-notification" role="alert">
+        <p><strong><?php esc_html_e( 'Test Mode Active', 'my-gateway' ); ?></strong> —
+           <?php esc_html_e( 'Use test card 4111 1111 1111 1111 to simulate a payment.', 'my-gateway' ); ?></p>
+    </div>
+    <?php endif; ?>
+
+    <!-- Card field (or any custom UI your gateway needs) -->
+    <div class="donation-form__field">
+        <label for="my_gateway_card"><?php esc_html_e( 'Card Number', 'my-gateway' ); ?></label>
+        <!-- Your JS SDK mounts here -->
+        <div id="MY-GATEWAY-CARD-ELEMENT"></div>
+    </div>
+
+    <!-- Hidden token field — your JS writes the tokenized card here before submit -->
+    <input type="hidden" id="my_gateway_token" name="my_gateway_token" value="">
+
+</div>
+```
+
+:::tip Theme overrides work too
+Donors' sites can override this template by placing a copy at `yourtheme/giftflow/payment-gateway/my-gateway-template.php`. See the [Template Override Guide](./developer-guide-template-override) for details.
+:::
+
+---
+
+## Settings Key Convention
+
+The enable/disable field **must** follow this naming pattern exactly:
+
+```
+Field key (in accordion fields):  {gateway_id}_enabled
+Option stored:                    giftflow_payment_options[{gateway_id}][{gateway_id}_enabled]
+```
+
+`Gateway_Base::init_settings()` reads it this way:
+
+```php
+$enabled_field_name = $this->id . '_enabled';       // e.g. 'my_gateway_enabled'
+$enabled = isset( $this->settings[ $enabled_field_name ] )
+    ? '1' === $this->settings[ $enabled_field_name ]
+    : false;
+$this->enabled = $enabled;
+```
+
+If the key is named differently, `$this->enabled` will always be `false` and the gateway will never appear in the donation form.
+
+To read a setting inside your class, use the inherited helper:
+
+```php
+$api_key = $this->get_setting( 'my_gateway_api_key' );
+$mode    = $this->get_setting( 'my_gateway_mode', 'sandbox' ); // with default
+```
+
+---
+
+## Using the Logger and Event History
+
+Both utilities are available as static classes and require no instantiation.
+
+```php
+use GiftFlow\Core\Logger as Giftflow_Logger;
+use GiftFlow\Core\Donation_Event_History;
+
+// Write to the GiftFlow system log (admin Dashboard → Logs)
+Giftflow_Logger::info(   'my_gateway.payment.succeeded', [ 'donation_id' => 42 ], 'my_gateway' );
+Giftflow_Logger::error(  'my_gateway.payment.failed',    [ 'reason' => 'declined' ], 'my_gateway' );
+Giftflow_Logger::warning('my_gateway.webhook.skipped',   [ 'event' => 'unknown' ], 'my_gateway' );
+Giftflow_Logger::debug(  'my_gateway.token.created',     [ 'token' => 'tok_xxx' ], 'my_gateway' );
+
+// Write to the per-donation event history (visible in Donation edit screen sidebar)
+// Signature: add( $donation_id, $event, $status, $note, $meta )
+Donation_Event_History::add( $donation_id, 'payment_succeeded', 'completed', '', [ 'gateway' => 'my_gateway' ] );
+Donation_Event_History::add( $donation_id, 'payment_pending',   'pending',   '', [ 'reference' => 'REF-001' ] );
+Donation_Event_History::add( $donation_id, 'payment_failed',    'failed',    'Card declined', [ 'gateway' => 'my_gateway' ] );
+```
+
+Log retention: `debug` 7 days, `info` / `warning` 30 days, `error` 90 days — auto-cleaned by a daily cron.
+
+---
+
+## Using the Donations Class
+
+```php
+use GiftFlow\Core\Donations;
+
+$donations = new Donations();
+
+// Update donation status (also fires giftflow_donation_status_updated hook)
+$donations->update_status( $donation_id, 'completed' );
+$donations->update_status( $donation_id, 'failed' );
+$donations->update_status( $donation_id, 'pending' );
+$donations->update_status( $donation_id, 'refunded' );
+
+// Get donation data
+$data = $donations->get( $donation_id );
+// $data['amount'], $data['status'], $data['transaction_id'], etc.
+```
+
+---
+
+## Firing Post-Payment Hooks
+
+After a successful payment, fire `giftflow_donation_after_payment_processed` so GiftFlow sends notification emails and creates the user account automatically:
+
+```php
+do_action( 'giftflow_donation_after_payment_processed', $donation_id, $payment_result );
+// $payment_result = true  → triggers thank-you email to donor
+// $payment_result = false → admin notification only (no donor email)
+```
+
+This is especially important in webhook handlers where the payment is confirmed asynchronously after the form submission.
+
+---
+
+## Available `$supports` Values
+
+The `$this->supports` array is informational — it populates the `giftflow_donation_form_payment_method_supports_class` filter and helps other code understand your gateway's capabilities. Use the values defined by the built-in gateways as reference:
+
+| Value | Meaning |
+|---|---|
+| `webhooks` | Gateway uses server-side webhook callbacks |
+| `3d_secure` | Gateway supports 3D Secure / SCA authentication |
+| `payment_intents` | Gateway uses a Payment Intent flow |
+| `one-time` | Gateway supports one-time donations |
+| `recurring` | Gateway supports recurring/subscription donations |
+
+```php
+$this->supports = array( 'webhooks', 'one-time' );
+```
+
+---
+
+## Full Gateway Properties Reference
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `$id` | `string` | ✅ | Unique gateway slug. Used as the `payment_method` value submitted in forms and as the settings key. |
+| `$title` | `string` | ✅ | Display name shown in the payment method selector and Settings tab. |
+| `$description` | `string` | — | Short description (used in gateway list array). |
+| `$icon` | `string` | — | Inline SVG or image URL string shown next to the title in the form. |
+| `$order` | `int` | — | Sort position in the donation form (default `10`; lower = first). |
+| `$supports` | `array` | — | Capability flags (informational). |
+| `$enabled` | `bool` | auto | Set automatically from `giftflow_payment_options[{id}][{id}_enabled]`. Do not set manually. |
+| `$settings` | `array` | auto | Set automatically from `giftflow_payment_options[{id}]`. Access via `get_setting()`. |
+
+---
+
+## Complete Checklist
+
+- [ ] `$this->id` is a unique lowercase slug with underscores
+- [ ] The enable field in `register_settings_fields()` is named exactly `{id}_enabled`
+- [ ] `template_html()` outputs a `<label>` with `<input type="radio" name="payment_method" value="{id}">`
+- [ ] `process_payment()` returns `true` on success or `\WP_Error` on failure
+- [ ] `process_payment()` calls `$donations->update_status()` to set the final status
+- [ ] `process_payment()` calls `Donation_Event_History::add()` to record the event
+- [ ] Gateway is registered inside `add_action( 'giftflow_register_gateways', ... )`
+- [ ] The action is added at `plugins_loaded` priority `20` or later (after GiftFlow loads)
+- [ ] Webhook handler (if any) is registered in `init_additional_hooks()`, not in `ready()`
+- [ ] After async payment confirmation (webhook), `giftflow_donation_after_payment_processed` is fired

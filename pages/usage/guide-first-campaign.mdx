@@ -1,0 +1,224 @@
+---
+title: "How to Start Your First Campaign 🎉"
+description: "A simple, step-by-step guide for setting up your first GiftFlow campaign from payment configuration to a live tested donation."
+sidebar_position: 1
+tags:
+  - "getting-started"
+  - "campaign"
+  - "first-campaign"
+---
+
+import { Callout } from 'nextra/components' 
+
+If this is your first time using GiftFlow, keep it simple: set up one payment method, create one campaign, publish it, and test a donation. That's it.
+
+---
+
+## Before You Start — Set Up a Payment Method First
+
+Campaigns need a working payment method before donors can complete a donation. **Do this first** — you will not be able to test anything without it.
+
+### Choose one payment method to start
+
+| Method | Best for |
+|---|---|
+| **Stripe** (recommended) | Credit and debit cards — fast setup, great for most campaigns |
+| **PayPal** | Donors who prefer PayPal — trusted and familiar worldwide |
+| **Direct Bank Transfer** | Manual / regional option — admin confirms payment manually |
+
+### How to configure it
+
+1. Go to **GiftFlow → Settings** in your WordPress admin.
+2. Click the **Payment** tab.
+3. Find your chosen payment method, expand it, and toggle **Enable** on.
+4. Enter your API keys or account credentials.
+5. Click **Save Settings**.
+6. Run a quick **sandbox / test payment** to confirm it works before creating your campaign.
+
+<Callout type="info"> 
+Start with just one payment method. You can add more later — getting stuck in multi-gateway setup is the most common reason first campaigns get delayed.
+</Callout>
+
+Detailed setup guides:
+- [Configure Stripe (Sandbox / Test Mode)](./guide-stripe-sandbox-setup)
+- [Configure PayPal (Sandbox / Test Mode)](./guide-paypal-sandbox-setup)
+
+---
+
+## Step 1 — Create Your First Campaign
+
+1. In your WordPress admin sidebar, go to **Campaigns → Add New**.
+2. Enter a clear **Campaign Title** in the title field at the top.
+
+> **Example title:** `Support our 2026 Scholarship Fund`
+
+A good title is specific and tells donors exactly what they are contributing to.
+
+---
+
+## Step 2 — Fill in Campaign Details
+
+The campaign editor has a **Campaign Details** meta box below the content area. It has two tabs: **General** and **Advanced**.
+
+### General tab
+
+These are the essential fields. Fill them all in before publishing.
+
+---
+
+#### Goal Amount
+Your fundraising target — the total you are trying to raise.
+
+> **Example:** `10000`
+
+Leave blank only if the campaign has no fixed goal. When a goal is set, GiftFlow automatically shows a progress bar on the campaign page.
+
+---
+
+#### Start Date
+The date and time when the campaign begins accepting donations.
+
+Pick today's date if you want the campaign to go live immediately after publishing. You can also set a future date and set the Status to **Pending** — the campaign will auto-activate when the start date is reached.
+
+---
+
+#### End Date
+The date and time when the campaign stops accepting donations.
+
+If you leave this empty, the campaign runs indefinitely — the status bar will show no end date.
+
+---
+
+#### Status
+Controls whether the campaign is currently open for donations.
+
+| Status | What it means |
+|---|---|
+| 🟢 **Active** | Campaign is open — donations are accepted right now |
+| ⏳ **Pending** | Not ready yet — auto-activates when the Start Date is reached |
+| 🏆 **Completed** | Goal reached — campaign is closed but donations are still allowed |
+| 🔒 **Closed** | Ended — no more donations accepted |
+
+**For your first campaign: choose Active.**
+
+---
+
+#### One-Time (toggle)
+Allows donors to make a single one-time donation.
+
+**Turn this ON.** One-time is the default and simplest donation type. It is on by default.
+
+---
+
+#### Recurring (toggle)
+Allows donors to set up a repeating subscription (monthly, yearly, etc.).
+
+**Leave this OFF for your first campaign.** Recurring donations require webhook configuration on Stripe or PayPal and a working subscription setup. Get your first one-time campaign working first, then add recurring later.
+
+---
+
+### Advanced tab
+
+Click the **Advanced** tab in the Campaign Details box to access these fields.
+
+---
+
+#### Preset Donation Amounts
+A list of suggested amounts shown as quick-select buttons on the donation form.
+
+Click **Add** to add each amount. Four options is a good starting point:
+
+| Button | Amount |
+|---|---|
+| Option 1 | `10` |
+| Option 2 | `25` |
+| Option 3 | `50` |
+| Option 4 | `100` |
+
+Donors can still type any amount — these are just suggestions to make choosing easier.
+
+---
+
+#### Allow Custom Donation Amounts (toggle)
+Lets donors type in any amount they want, in addition to the preset buttons.
+
+**Leave this ON** (it is on by default). Most campaigns benefit from accepting any amount.
+
+---
+
+#### Location
+A text label showing where the campaign is based. Optional — helpful for local or community campaigns.
+
+> **Example:** `New York, NY` or `Ho Chi Minh City`
+
+---
+
+#### Gallery
+Upload images for the campaign's photo gallery. The first image is shown as the main campaign image; additional images become the thumbnail strip below it.
+
+**Start with 1 good photo.** You can always add more later. A single strong, relevant image is better than several low-quality ones.
+
+---
+
+## Step 3 — Write Your Campaign Content
+
+In the main post editor area (above the Campaign Details box), write the **campaign story**. Tell donors:
+
+- What the campaign is for
+- Who it helps
+- Why their donation matters
+- What the money will be used for
+
+This is the content that appears in the **Campaign** tab on the single campaign page. Keep it honest and human — donors give to people, not to fundraising copy.
+
+---
+
+## Step 4 — Publish and Test
+
+1. When you are happy with the content and fields, click **Publish** (top-right).
+
+2. Click **View Campaign** (the link that appears after publishing) to open the campaign page as a visitor.
+
+3. Make a **test donation** using your payment method's test credentials:
+   - **Stripe Sandbox:** card `4242 4242 4242 4242`, any future expiry, any CVC
+   - **PayPal Sandbox:** log in with your sandbox buyer account
+   - **Bank Transfer:** submit the form — the donation records as Pending for manual confirmation
+
+4. After the test, go back to your WordPress admin and confirm all three things happened:
+
+   ✅ A **Donation** record is created under **GiftFlow → Donations** with status **Completed**  
+   ✅ A **Donor** record is created or updated under **GiftFlow → Donors**  
+   ✅ **Emails** are sent — check both the admin notification inbox and the donor email inbox
+
+---
+
+## Recommended First-Campaign Settings
+
+When in doubt, use these defaults. They cover the vast majority of first campaigns and you can adjust anything later.
+
+| Field | Recommended value |
+|---|---|
+| Status | Active |
+| One-Time | ✅ On |
+| Recurring | ❌ Off |
+| Preset amounts | 10 — 25 — 50 — 100 |
+| Allow Custom Amounts | ✅ On |
+| End Date | Set one (or leave blank for ongoing) |
+| Gallery | 1 image to start |
+
+---
+
+## Quick Checklist
+
+Before you share your campaign link with anyone, run through this list:
+
+- [ ] Payment method configured and **sandbox test passed**
+- [ ] Campaign title is clear and specific
+- [ ] Goal Amount, Start Date, and Status are set
+- [ ] Preset donation amounts added (4 is plenty)
+- [ ] Campaign content (story) written
+- [ ] Published and **test donation end-to-end confirmed**
+- [ ] Donation, Donor records created ✅
+- [ ] Admin and donor emails received ✅
+
+Once everything is checked off — you are ready to share your campaign and start raising. 🎉

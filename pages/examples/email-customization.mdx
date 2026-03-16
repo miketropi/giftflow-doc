@@ -1,0 +1,545 @@
+---
+title: "Email Template Customization"
+description: "Complete guide for customizing GiftFlow email templates — from theme overrides and PHP filters to building entirely new transactional emails from scratch."
+sidebar_position: 8
+tags:
+  - "giftflow"
+  - "developer"
+  - "email"
+  - "templates"
+---
+
+GiftFlow sends three transactional emails. Each one is built from two layers: an **outer wrapper** (`template-default.php`) that provides the full HTML document with header and footer, and an **inner content template** that renders the body specific to each email type.
+
+All templates support theme overrides, PHP filters, and full replacement — you can customize anything from a single line of text all the way to a completely custom HTML layout.
+
+---
+
+## Email Architecture
+
+```
+giftflow_send_mail_template([
+  'to'      => $recipient,
+  'subject' => 'Email subject',
+  'header'  => 'Text shown top-right in header row',
+  'content' => $rendered_inner_html,   ← from content template
+  'footer'  => '',                      ← optional extra footer HTML
+])
+        │
+        ▼
+email/template-default.php            ← full <!DOCTYPE html> wrapper
+  └── $header   → right side of header row
+  └── $content  → white content box  ← your inner template renders here
+  └── $footer   → above auto-disclaimer
+```
+
+The **outer wrapper** renders the full email document: doctype, `<head>` with inline styles, brand header (site name + `$header` text), the white content box, and the auto-disclaimer footer.
+
+The **inner content templates** only render the HTML that goes *inside* the white box — they are **not** complete HTML documents.
+
+---
+
+## The Three Built-in Emails
+
+| Email | Inner Template | Triggered By |
+|---|---|---|
+| Donor Thank-You | `email/thanks-donor.php` | Successful payment (`$payment_result === true`) |
+| Admin New Donation | `email/new-donation-admin.php` | Every completed payment |
+| New Donor Account | `email/new-user.php` | First-time donation, auto-created WP user |
+
+---
+
+## Method 1 — Theme File Override (Recommended)
+
+Copy any template file into your theme under a `giftflow/email/` folder. GiftFlow's template loader checks your theme **before** the plugin, so your file wins automatically with no hooks needed.
+
+### Override lookup order
+
+```
+1. yourtheme/email/template-default.php     ← checked first
+2. yourtheme/giftflow/email/template-default.php
+3. giftflow/templates/email/template-default.php  ← plugin default
+```
+
+### Step-by-step
+
+**1. Create the folder in your theme:**
+
+```bash
+mkdir -p wp-content/themes/your-theme/giftflow/email
+```
+
+**2. Copy the file you want to customize:**
+
+```bash
+# Outer wrapper
+cp wp-content/plugins/giftflow/templates/email/template-default.php \
+   wp-content/themes/your-theme/giftflow/email/template-default.php
+
+# Donor thank-you content
+cp wp-content/plugins/giftflow/templates/email/thanks-donor.php \
+   wp-content/themes/your-theme/giftflow/email/thanks-donor.php
+
+# Admin notification content
+cp wp-content/plugins/giftflow/templates/email/new-donation-admin.php \
+   wp-content/themes/your-theme/giftflow/email/new-donation-admin.php
+
+# New user welcome content
+cp wp-content/plugins/giftflow/templates/email/new-user.php \
+   wp-content/themes/your-theme/giftflow/email/new-user.php
+```
+
+**3. Edit the copy in your theme** — the plugin file stays untouched, so updates won't overwrite your changes.
+
+:::tip Safe from plugin updates
+Only files in your theme override plugin templates. Never edit files directly inside `wp-content/plugins/giftflow/templates/` — they will be overwritten when the plugin updates.
+:::
+
+---
+
+## Method 2 — PHP Filter Overrides (No File Copy Needed)
+
+If you only need to tweak small parts of an email — the subject line, a heading, or a few template variables — use the filter hooks. These work from a custom plugin or your theme's `functions.php`.
+
+### Donor Thank-You email filters
+
+```php
+// Change every variable passed to the content template
+add_filter( 'giftflow_thanks_donor_email_args', function( $args, $donation_id, $donation_data ) {
+
+    // Add a custom field (must be used in your overridden template)
+    $args['custom_receipt_note'] = 'Your tax receipt will arrive within 5 business days.';
+
+    // Override the dashboard URL
+    $args['donor_dashboard_url'] = home_url( '/my-giving/' );
+
+    return $args;
+}, 10, 3 );
+
+// Modify the email subject line
+add_filter( 'giftflow_thanks_donor_email_subject', function( $subject, $donation_id, $donation_data ) {
+    return sprintf( 'Thank you for your %s donation! 💙', $donation_data->__amount_formatted );
+}, 10, 3 );
+
+// Modify the header text (right side of the email header row)
+add_filter( 'giftflow_thanks_donor_email_header', function( $header, $donation_id, $donation_data ) {
+    return '🎉 Donation received!';
+}, 10, 3 );
+```
+
+### Admin New Donation email filters
+
+```php
+// Change every variable passed to the content template
+add_filter( 'giftflow_new_donation_admin_email_args', function( $args, $donation_id, $donation_data ) {
+    $args['custom_note'] = 'Assigned to: Finance Team';
+    return $args;
+}, 10, 3 );
+
+// Modify the admin email subject
+add_filter( 'giftflow_new_donation_admin_email_subject', function( $subject, $donation_id, $donation_data ) {
+    return '[URGENT] New Donation — ' . $donation_data->campaign_name;
+}, 10, 3 );
+
+// Modify the admin header text
+add_filter( 'giftflow_new_donation_admin_email_header', function( $header, $donation_id, $donation_data ) {
+    return '💰 New donation just received';
+}, 10, 3 );
+```
+
+### New User Welcome email filter
+
+```php
+// Modify the data passed to the new-user content template
+add_filter( 'giftflow_new_user_email_data', function( $data, $donor_data, $user_id, $donor_id ) {
+    $data['login_url'] = home_url( '/my-account/' );
+    return $data;
+}, 10, 4 );
+```
+
+---
+
+## Method 3 — Full Template File Replacement via Filter
+
+Use `giftflow_template_file` to redirect any template file to a completely different path — useful when you want to store email templates in a plugin rather than a theme.
+
+```php
+add_filter( 'giftflow_template_file', function( $template_file, $template_name, $args ) {
+    if ( 'email/thanks-donor.php' === $template_name ) {
+        return MY_PLUGIN_DIR . 'templates/email/thanks-donor.php';
+    }
+    return $template_file;
+}, 10, 3 );
+```
+
+---
+
+## Variables Reference
+
+### Outer Wrapper — `email/template-default.php`
+
+These variables are extracted inside the template from the args array passed by `giftflow_send_mail_template()`.
+
+| Variable | Type | Source | Description |
+|---|---|---|---|
+| `$header` | `string` | `giftflow_send_mail_template()` arg | Text shown on the right side of the header row. Falls back to "Thank you for your support". |
+| `$content` | `string` | `giftflow_send_mail_template()` arg | The rendered HTML of the inner content template — injected into the white `.email-content` box. |
+| `$footer` | `string` | `giftflow_send_mail_template()` arg | Optional extra HTML rendered above the auto-disclaimer. Defaults to empty. |
+| `$site_name` | `string` | `get_bloginfo('name')` | Your site name — shown in the header and disclaimer. |
+| `$site_url` | `string` | `home_url()` | Your site URL — used in links in the disclaimer. |
+| `$admin_email` | `string` | `get_option('admin_email')` | Admin email — shown in the disclaimer contact line. |
+| `$accent_color` | `string` | Hardcoded `'#0b57d0'` | Blue used for links, buttons, and highlight borders. Override in your theme copy. |
+
+### Donor Thank-You — `email/thanks-donor.php`
+
+| Variable | Type | Description |
+|---|---|---|
+| `$donation_id` | `int\|string` | Donation post ID |
+| `$campaign_name` | `string` | Campaign title |
+| `$campaign_url` | `string` | Campaign permalink |
+| `$donor_name` | `string` | Donor first + last name |
+| `$donor_email` | `string` | Donor email address |
+| `$amount` | `string` | HTML-formatted amount (e.g. `<span ...>$50.00</span>`) |
+| `$date` | `string` | Formatted donation date |
+| `$donor_dashboard_url` | `string` | URL to the donor account page |
+| `$transaction_id` | `string` | Gateway transaction ID (optional — shown only when not empty) |
+
+### Admin New Donation — `email/new-donation-admin.php`
+
+| Variable | Type | Description |
+|---|---|---|
+| `$donation_id` | `int\|string` | Donation post ID |
+| `$donation_edit_url` | `string` | Admin edit link for this donation |
+| `$campaign_name` | `string` | Campaign title |
+| `$campaign_url` | `string` | Campaign permalink |
+| `$donor_name` | `string` | Donor full name |
+| `$donor_email` | `string` | Donor email address |
+| `$amount` | `string` | HTML-formatted amount |
+| `$date` | `string` | Formatted donation date |
+| `$payment_method` | `string` | Gateway slug (e.g. `stripe`, `paypal`) |
+| `$status` | `string` | Donation status (e.g. `completed`) |
+
+### New User Welcome — `email/new-user.php`
+
+| Variable | Type | Description |
+|---|---|---|
+| `$name` | `string` | Donor full name |
+| `$username` | `string` | WordPress login username (email address) |
+| `$password` | `string` | Auto-generated password (shown only when not empty) |
+| `$login_url` | `string` | URL to the donor account / login page |
+
+---
+
+## Customization Examples
+
+### Example 1 — Change the Accent Color
+
+Copy `template-default.php` to your theme, then change the `$accent_color` variable at the top:
+
+```php
+// yourtheme/giftflow/email/template-default.php
+
+$accent_color = '#e63946'; // your brand red
+```
+
+Every link, button, highlight border, and social link in the email will use this color automatically.
+
+---
+
+### Example 2 — Add a Logo to the Email Header
+
+In your theme copy of `template-default.php`, replace the site name `<h1>` with an `<img>` tag:
+
+```php
+// In the header <td> that currently has:
+// <h1 ...><?php echo esc_html( $site_name ); ?></h1>
+
+<a href="<?php echo esc_url( $site_url ); ?>">
+    <img
+        src="<?php echo esc_url( get_theme_mod( 'custom_logo' ) ? wp_get_attachment_image_url( get_theme_mod( 'custom_logo' ), 'full' ) : '' ); ?>"
+        alt="<?php echo esc_attr( $site_name ); ?>"
+        style="max-height: 50px; width: auto; display: block;"
+    />
+</a>
+```
+
+---
+
+### Example 3 — Add a Custom Row to the Donor Thank-You Email
+
+**Step 1 — Inject a new variable using the filter:**
+
+```php
+// functions.php or custom plugin
+add_filter( 'giftflow_thanks_donor_email_args', function( $args, $donation_id, $donation_data ) {
+    // Generate a simple tax receipt number
+    $args['receipt_number'] = 'RCPT-' . str_pad( $donation_id, 6, '0', STR_PAD_LEFT );
+    return $args;
+}, 10, 3 );
+```
+
+**Step 2 — Add a new row in your theme copy of `thanks-donor.php`, inside the summary table:**
+
+```php
+<!-- Receipt Number (custom) -->
+<?php if ( ! empty( $receipt_number ) ) : ?>
+<tr>
+    <td style="padding: .8rem 0; border-bottom: 1px solid #f1f3f4;">
+        <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+            <tr>
+                <td style="width: 30%; padding: 0; vertical-align: top;">
+                    <p style="font-size: 0.9rem; margin: 0;">Receipt #:</p>
+                </td>
+                <td style="width: 70%; padding: 0; vertical-align: top;">
+                    <span style="font-family: monospace; font-size: 0.85rem;">
+                        <?php echo esc_html( $receipt_number ); ?>
+                    </span>
+                </td>
+            </tr>
+        </table>
+    </td>
+</tr>
+<?php endif; ?>
+```
+
+---
+
+### Example 4 — Override the Entire Outer Wrapper
+
+For a completely custom design — your own layout, fonts, and branding — replace `template-default.php` with your own HTML document. The only two things you **must** keep are the `$content` output inside the body and the `$header`/`$footer` variables (or your own equivalents):
+
+```php
+<?php
+// yourtheme/giftflow/email/template-default.php
+if ( ! defined( 'ABSPATH' ) ) exit;
+
+$header  = $header  ?? '';
+$content = $content ?? '';
+$footer  = $footer  ?? '';
+
+$site_name   = get_bloginfo( 'name' );
+$site_url    = home_url();
+$admin_email = get_option( 'admin_email' );
+$brand_color = '#2d6a4f'; // your brand green
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?php echo esc_html( $site_name ); ?></title>
+    <style>
+        body { margin: 0; padding: 0; background: #f0f4f0; font-family: Georgia, serif; }
+        .wrapper { max-width: 600px; margin: 0 auto; padding: 24px; }
+        .brand-bar { background: <?php echo esc_attr( $brand_color ); ?>; padding: 20px 24px; border-radius: 6px 6px 0 0; }
+        .brand-bar h1 { color: #fff; margin: 0; font-size: 1.2rem; }
+        .body-box { background: #fff; padding: 32px; border-radius: 0 0 6px 6px; }
+        .disclaimer { margin-top: 24px; font-size: 0.75rem; color: #888; text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="brand-bar">
+            <h1><?php echo esc_html( $site_name ); ?></h1>
+            <?php if ( ! empty( $header ) ) : ?>
+                <p style="margin: 4px 0 0; color: rgba(255,255,255,0.85); font-size: .85rem;">
+                    <?php echo wp_kses_post( $header ); ?>
+                </p>
+            <?php endif; ?>
+        </div>
+
+        <div class="body-box">
+            <?php echo wp_kses_post( $content ); ?>
+
+            <?php if ( ! empty( $footer ) ) : ?>
+                <div style="margin-top: 24px; border-top: 1px solid #eee; padding-top: 16px;">
+                    <?php echo wp_kses_post( $footer ); ?>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <p class="disclaimer">
+            This email was sent by
+            <a href="<?php echo esc_url( $site_url ); ?>" style="color: <?php echo esc_attr( $brand_color ); ?>;">
+                <?php echo esc_html( $site_name ); ?>
+            </a>.
+            Questions? Email us at
+            <a href="mailto:<?php echo esc_attr( $admin_email ); ?>" style="color: <?php echo esc_attr( $brand_color ); ?>;">
+                <?php echo esc_html( $admin_email ); ?>
+            </a>.
+        </p>
+    </div>
+</body>
+</html>
+```
+
+---
+
+### Example 5 — Send a Completely Custom Email
+
+Use `giftflow_send_mail_template()` to send any transactional email using GiftFlow's wrapper. This is useful for subscription renewal confirmations, refund notices, or custom admin alerts.
+
+**Step 1 — Create your content template** in your theme or plugin:
+
+```php
+<?php
+// yourtheme/giftflow/email/subscription-renewal.php
+if ( ! defined( 'ABSPATH' ) ) exit;
+
+$donor_name    = $donor_name    ?? '';
+$amount        = $amount        ?? '';
+$next_date     = $next_date     ?? '';
+$campaign_name = $campaign_name ?? '';
+$dashboard_url = $dashboard_url ?? '';
+?>
+
+<h2 style="font-size: 1.2rem; font-weight: 600; margin: 0 0 1rem 0; color: black;">
+    Recurring Donation Renewed
+</h2>
+
+<p style="margin: 0 0 1.5rem 0; line-height: 1.6; opacity: .8; font-size: .9rem;">
+    Dear <?php echo esc_html( $donor_name ); ?>,
+</p>
+
+<p style="margin: 0 0 1.5rem 0; line-height: 1.6; opacity: .8; font-size: .9rem;">
+    Your recurring donation to <strong><?php echo esc_html( $campaign_name ); ?></strong>
+    has been successfully renewed.
+</p>
+
+<table width="100%" cellpadding="0" cellspacing="0" role="presentation"
+    style="border-collapse: collapse; border: 1px solid #e9ecef; border-radius: .3rem; overflow: hidden;">
+    <tr>
+        <td style="padding: .8rem 0; border-bottom: 1px solid #e9ecef;">
+            <strong>Renewal Summary</strong>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding: .8rem 0; border-bottom: 1px solid #f1f3f4;">
+            <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+                <tr>
+                    <td style="width: 40%; padding: 0;">Amount:</td>
+                    <td style="width: 60%; padding: 0; font-weight: 600;">
+                        <?php echo wp_kses_post( $amount ); ?>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+    <tr>
+        <td style="padding: .8rem 0;">
+            <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+                <tr>
+                    <td style="width: 40%; padding: 0;">Next Payment:</td>
+                    <td style="width: 60%; padding: 0;"><?php echo esc_html( $next_date ); ?></td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+
+<?php if ( ! empty( $dashboard_url ) ) : ?>
+    <p style="text-align: center; margin: 2rem 0 0;">
+        <a href="<?php echo esc_url( $dashboard_url ); ?>"
+            style="font-weight: 600; text-decoration: none; border-bottom: 2px solid;">
+            👉 Manage My Subscription
+        </a>
+    </p>
+<?php endif; ?>
+```
+
+**Step 2 — Send the email from a hook:**
+
+```php
+add_action( 'giftflow_stripe_recurring_renewal_created', function( $renewal_id, $parent_id, $sub_id, $invoice ) {
+    $donation    = giftflow_get_donation_data_by_id( $renewal_id );
+    $parent      = giftflow_get_donation_data_by_id( $parent_id );
+    $next_ts     = get_post_meta( $parent_id, '_recurring_next_payment_date', true );
+    $next_date   = $next_ts ? date_i18n( get_option( 'date_format' ), strtotime( $next_ts ) ) : '—';
+
+    ob_start();
+    giftflow_load_template( 'email/subscription-renewal.php', array(
+        'donor_name'    => $donation->donor_name,
+        'amount'        => $donation->__amount_formatted,
+        'campaign_name' => $donation->campaign_name,
+        'next_date'     => $next_date,
+        'dashboard_url' => get_permalink( giftflow_get_donor_account_page() ),
+    ) );
+    $content = ob_get_clean();
+
+    giftflow_send_mail_template( array(
+        'to'      => $donation->donor_email,
+        'subject' => 'Your recurring donation has been renewed',
+        'header'  => '🔄 Subscription renewal',
+        'content' => $content,
+    ) );
+}, 10, 4 );
+```
+
+---
+
+## Sending a Custom Admin Alert Email
+
+You can send any admin alert email with a simple inline content string — no separate template file needed for simple notifications:
+
+```php
+add_action( 'giftflow_donation_status_refunded', function( $donation_id, $old_status ) {
+    $donation = giftflow_get_donation_data_by_id( $donation_id );
+
+    $content  = '<p>A donation has been refunded.</p>';
+    $content .= '<p><strong>Donor:</strong> ' . esc_html( $donation->donor_name ) . '</p>';
+    $content .= '<p><strong>Amount:</strong> ' . wp_kses_post( $donation->__amount_formatted ) . '</p>';
+    $content .= '<p><a href="' . esc_url( $donation->donation_edit_url ) . '">View in Admin →</a></p>';
+
+    giftflow_send_mail_template( array(
+        'to'      => get_option( 'admin_email' ),
+        'subject' => 'Donation Refunded — #' . $donation_id,
+        'header'  => '↩ Refund processed',
+        'content' => $content,
+    ) );
+}, 10, 2 );
+```
+
+---
+
+## CSS Classes Reference
+
+These classes and IDs are available in the outer wrapper (`template-default.php`) for targeting from your custom styles.
+
+| Selector | Location | Purpose |
+|---|---|---|
+| `.email-container` | Wrapper | 600px centred container |
+| `.email-header` | Header row | Brand name + header text row |
+| `.email-content` | Content box | White content card |
+| `.email-footer` | Footer | Disclaimer area |
+| `.highlight-box` | Content | Left-bordered callout box |
+| `.button` | Content | CTA button style |
+| `#giftflow-email-table` | Content tables | Shared table ID — `p` elements inside get `margin-bottom: 0` |
+
+Since email clients have very limited CSS support, all styles in the plugin templates are **inline**. When writing custom templates, always inline your CSS as `style=""` attributes on individual elements.
+
+---
+
+## Quick Reference
+
+### Template files and their theme override paths
+
+| Original Plugin File | Theme Override Path |
+|---|---|
+| `templates/email/template-default.php` | `yourtheme/giftflow/email/template-default.php` |
+| `templates/email/thanks-donor.php` | `yourtheme/giftflow/email/thanks-donor.php` |
+| `templates/email/new-donation-admin.php` | `yourtheme/giftflow/email/new-donation-admin.php` |
+| `templates/email/new-user.php` | `yourtheme/giftflow/email/new-user.php` |
+
+### Filter hooks summary
+
+| Filter | Controls | Parameters |
+|---|---|---|
+| `giftflow_thanks_donor_email_args` | All template vars for donor thank-you | `$args, $donation_id, $donation_data` |
+| `giftflow_thanks_donor_email_subject` | Donor thank-you subject line | `$subject, $donation_id, $donation_data` |
+| `giftflow_thanks_donor_email_header` | Donor thank-you header text | `$header, $donation_id, $donation_data` |
+| `giftflow_new_donation_admin_email_args` | All template vars for admin notification | `$args, $donation_id, $donation_data` |
+| `giftflow_new_donation_admin_email_subject` | Admin notification subject line | `$subject, $donation_id, $donation_data` |
+| `giftflow_new_donation_admin_email_header` | Admin notification header text | `$header, $donation_id, $donation_data` |
+| `giftflow_new_user_email_data` | All template vars for new user welcome | `$data, $donor_data, $user_id, $donor_id` |
+| `giftflow_template_file` | Redirect any template to a different file path | `$file, $template_name, $args` |
+| `giftflow_template_path` | Override the template lookup path prefix | `$path, $template_name` |

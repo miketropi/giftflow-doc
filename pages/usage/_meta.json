@@ -1,0 +1,11 @@
+{
+  "guide-first-campaign": {
+    "title": "Creating Your First Campaign 🎉"
+  },
+  "guide-stripe-sandbox-setup": {
+    "title": "Stripe Sandbox Setup"
+  },
+  "guide-paypal-sandbox-setup": {
+    "title": "Paypal Sandbox Setup"
+  }
+}
